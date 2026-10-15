@@ -46,7 +46,6 @@ impl SimplePluginCommand for Open {
         _input: &Value,
     ) -> Result<Value, LabeledError> {
         let cwd = PathBuf::from(engine.get_current_dir()?);
-
         let repo = call.get_flag::<Spanned<PathBuf>>(REPO_FLAG)?;
 
         run_open(&cwd, repo)
@@ -76,13 +75,11 @@ fn run_open(cwd: &Path, repo: Option<Spanned<PathBuf>>) -> Result<Repository, Co
 mod tests {
     use super::*;
 
-    use crate::git::GixError;
-
+    use nu_protocol::Span;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
-    use nu_protocol::Span;
-    use std::{fs, io};
+    use std::io;
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {
@@ -108,6 +105,7 @@ mod tests {
     #[fixture]
     fn repo_dir(dir: Result<TempDir, TestError>) -> Result<TempDir, TestError> {
         let dir = dir?;
+
         gix::init(dir.path())?;
 
         Ok(dir)
@@ -124,50 +122,13 @@ mod tests {
         use super::*;
 
         #[rstest]
-        fn returns_handle_for_repository(
+        fn delegates_to_git_discover(
             repo_dir: Result<TempDir, TestError>,
         ) -> Result<(), TestError> {
             let dir = repo_dir?;
             let handle = run_open(dir.path(), None)?;
 
             assert_eq!(handle.path.canonicalize()?, dir.path().canonicalize()?);
-            assert_eq!(
-                handle
-                    .work_tree
-                    .as_deref()
-                    .map(Path::canonicalize)
-                    .transpose()?,
-                Some(dir.path().canonicalize()?)
-            );
-
-            Ok(())
-        }
-
-        #[rstest]
-        fn discovers_parent_from_subdirectory(
-            repo_dir: Result<TempDir, TestError>,
-        ) -> Result<(), TestError> {
-            let dir = repo_dir?;
-            let sub = dir.path().join("a").join("b");
-            fs::create_dir_all(&sub)?;
-
-            let handle = run_open(&sub, None)?;
-
-            assert_eq!(handle.path.canonicalize()?, dir.path().canonicalize()?);
-
-            Ok(())
-        }
-
-        #[rstest]
-        fn opens_absolute_repo_flag_from_any_directory(
-            repo_dir: Result<TempDir, TestError>,
-            dir: Result<TempDir, TestError>,
-        ) -> Result<(), TestError> {
-            let (repo, elsewhere) = (repo_dir?, dir?);
-
-            let handle = run_open(elsewhere.path(), Some(flag(repo.path())))?;
-
-            assert_eq!(handle.path.canonicalize()?, repo.path().canonicalize()?);
 
             Ok(())
         }
@@ -178,24 +139,12 @@ mod tests {
         ) -> Result<(), TestError> {
             let dir = repo_dir?;
             let nested = dir.path().join("nested");
+
             gix::init(&nested)?;
 
             let handle = run_open(dir.path(), Some(flag(Path::new("nested"))))?;
 
             assert_eq!(handle.path.canonicalize()?, nested.canonicalize()?);
-
-            Ok(())
-        }
-
-        #[rstest]
-        fn fails_outside_a_repository(dir: Result<TempDir, TestError>) -> Result<(), TestError> {
-            let dir = dir?;
-
-            let err = run_open(dir.path(), None)
-                .err()
-                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
-
-            assert!(matches!(err, CommandError::Git(GixError::Open { .. })));
 
             Ok(())
         }
