@@ -1,0 +1,57 @@
+name: Update Cargo.lock
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  update-cargo-lock:
+    if: github.repository_owner == 'asakura'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: Run cargo update and check what changed
+        id: cargo_update
+
+        run: |
+          # 1. Get the list of all direct dependencies across the workspace
+          DIRECT_DEPS=$(nix develop -c bash -c "cargo metadata --format-version 1 | jq -r '
+            .workspace_members as \$members |
+            .packages[] | select(.id | IN(\$members[])).dependencies[].name
+          ' | sort -u")
+
+          # 2. Run cargo update and capture output to a temporary file
+          UPDATE_LOG="${{ runner.temp }}/update_output.txt"
+          nix develop -c bash -c "cargo update 2>&1" | tee "$UPDATE_LOG"
+
+          # 3. Revert updates for any direct dependency so only transitive dependencies remain updated
+          grep -E '^\s*(Updating|Downgrading)\s+' "$UPDATE_LOG" | while read -r action pkg old_v arrow new_v; do
+            if echo "$DIRECT_DEPS" | grep -qx "$pkg"; then
+              clean_v="${old_v#v}"
+              echo "Reverting direct dependency $pkg back to $clean_v"
+              nix develop -c bash -c "cargo update -p $pkg --precise $clean_v"
+            fi
+          done
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v8
+        continue-on-error: true
+
+        with:
+          title: "chore(cargo): update transitive dependencies in Cargo.lock"
+          commit-message: "chore(cargo): update transitive dependencies in Cargo.lock"
+          branch: "chore/update-cargo-lock"
+          delete-branch: true
+
+          labels: |
+            dependencies
+            automated
