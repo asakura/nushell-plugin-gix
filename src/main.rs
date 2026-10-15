@@ -28,7 +28,11 @@ impl Plugin for GixPlugin {
     }
 
     fn commands(&self) -> Vec<Box<dyn PluginCommand<Plugin = Self>>> {
-        vec![Box::new(commands::Open), Box::new(commands::Log)]
+        vec![
+            Box::new(commands::Gix),
+            Box::new(commands::Open),
+            Box::new(commands::Log),
+        ]
     }
 }
 
