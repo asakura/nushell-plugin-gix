@@ -152,7 +152,7 @@ mod tests {
             let registry = Registry::new();
             let handle = run_open(&registry, dir.path(), None)?;
 
-            registry.release(handle.id);
+            registry.release(handle.id, &handle.git_dir);
 
             let err = registry.acquire(handle.id, &handle.location());
 
