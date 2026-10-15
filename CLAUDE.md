@@ -70,9 +70,12 @@ commands = "one PluginCommand per Nushell command; signature(), description and 
 # two sides, one direction of dependency: Nushell side -> git side, never the reverse
 git     = "src/git/: all gix access; MUST NOT import nu_protocol/nu_plugin (grep src/git for nu_ must stay empty); no Span, Value, LabeledError, CustomValue"
 nushell = "src/commands/ + src/cdt/ (custom data types): PluginCommands, CustomValues, Value/record mapping, LabeledError conversion; MUST NOT touch gix types (tests may call gix to build fixtures)"
-api     = "git module exposes domain types (CommitInfo, GixError) and plain-Rust fns/iterators; no gix::Repository or other gix types in its pub API; mod.rs only declares modules and re-exports"
+api     = "git module exposes domain types (CommitInfo, GixError) and plain-Rust fns/iterators; gix types may live inside git-side state objects but never cross into src/cdt or src/commands; mod.rs only declares modules and re-exports"
 errors  = "git::GixError is Nushell-free; commands::CommandError wraps it (#[from]) plus argument errors (e.g. NegativeLimit) and owns into_labeled(span), called only at run/stream-mapping boundaries"
-values  = "custom values hold only serializable plain handles (e.g. PathBuf); commands re-open via git on each call — never store gix::Repository in a CustomValue"
+values  = "cdt values are stateful handles: they serialize only an id plus the self-describing fields needed to rebuild their state (git dir, sides, oids, validity stamp); the state itself (may hold gix types) lives plugin-side in a git-side registry that is only a cache"
+state   = "registry entries are Arc'd immutable snapshots + a stamp; every use validates the stamp: content-addressed state never goes stale; live state (index/worktree/refs/config) is revalidated on reads and compare-and-swap on writes (stale-changeset, nothing applied)"
+gc      = "Nushell GC stops idle plugins (default 10s) and live custom values do NOT keep a plugin alive: an unknown id means rebuild from the handle's fields, never a bare error; stale-handle/repository-gone only when rebuilding is impossible; drop is signalled via notify_plugin_on_drop -> Plugin::custom_value_dropped; set_gc_disabled is an optional tuning step, not a correctness mechanism"
+scratch = "files owned by handles (scratch indexes) live in a per-plugin temp dir and are swept for orphans at startup; a killed plugin gets no drop notification"
 streams = "git yields Iterator<Item = Result<DomainType, GixError>>; commands map items to Value and wrap in ListStream with engine.signals()"
 doctest = "bin crate => no doctests; if the git side needs tested examples, extract src/git into a lib target (compile-time enforcement of this boundary)"
 
