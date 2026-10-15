@@ -1,6 +1,6 @@
 //! Streaming commit history from a repository.
 
-use super::{GixError, Snapshot};
+use super::{GixError, OpenRepository};
 
 use chrono::{DateTime, FixedOffset};
 use commit::simple;
@@ -58,13 +58,13 @@ impl Iterator for CommitLog {
 /// Returns a [`GixError`] when HEAD has no commit or the
 /// walker thread cannot be started. Failures while reading individual commits are yielded by
 /// the returned stream.
-pub fn log(snapshot: Arc<Snapshot>, limit: Option<usize>) -> Result<CommitLog, GixError> {
-    let tip = snapshot.repo().head_id().map_err(GixError::Head)?.detach();
+pub fn log(opened: Arc<OpenRepository>, limit: Option<usize>) -> Result<CommitLog, GixError> {
+    let tip = opened.repo().head_id().map_err(GixError::Head)?.detach();
     let (sender, receiver) = mpsc::sync_channel(CHANNEL_CAPACITY);
 
     thread::Builder::new()
         .name(WALKER_THREAD_NAME.to_owned())
-        .spawn(move || feed(&snapshot.repo(), tip, limit, &sender))
+        .spawn(move || feed(&opened.repo(), tip, limit, &sender))
         .map_err(GixError::Spawn)?;
 
     Ok(CommitLog { receiver })
@@ -203,8 +203,8 @@ mod tests {
         Ok(TempDir::new()?)
     }
 
-    /// A registered snapshot of the repository at `path`.
-    fn snapshot_of(path: &Path) -> Result<Arc<Snapshot>, TestError> {
+    /// The registered `OpenRepository` for the repository at `path`.
+    fn opened_at(path: &Path) -> Result<Arc<OpenRepository>, TestError> {
         let location = discover(path)?;
         let registry = Registry::new();
         let id = registry.register(&location)?;
@@ -213,7 +213,7 @@ mod tests {
     }
 
     fn collect(path: &Path, limit: Option<usize>) -> Result<Vec<CommitInfo>, TestError> {
-        Ok(log(snapshot_of(path)?, limit)?.collect::<Result<_, _>>()?)
+        Ok(log(opened_at(path)?, limit)?.collect::<Result<_, _>>()?)
     }
 
     mod log {
@@ -282,7 +282,7 @@ mod tests {
 
             init_with_history(dir.path(), &HISTORY)?;
 
-            let mut stream = log(snapshot_of(dir.path())?, None)?;
+            let mut stream = log(opened_at(dir.path())?, None)?;
 
             let first = stream
                 .next()
@@ -302,7 +302,7 @@ mod tests {
 
             init_with_history(dir.path(), &[])?;
 
-            let err = log(snapshot_of(dir.path())?, None)
+            let err = log(opened_at(dir.path())?, None)
                 .err()
                 .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
