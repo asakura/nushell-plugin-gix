@@ -159,7 +159,7 @@ mod tests {
         fn accepts_gix_repository() -> Result<(), TestError> {
             let handle = Repository {
                 git_dir: PathBuf::from("/x/.git"),
-                work_tree: None,
+                worktree: None,
                 path: PathBuf::from("/tmp/r"),
             };
 

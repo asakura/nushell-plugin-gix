@@ -9,15 +9,15 @@ use std::path::{Path, PathBuf};
 pub struct RepositoryLocation {
     /// The repository's git directory (for a linked worktree, its private `worktrees/<name>` directory).
     pub git_dir: PathBuf,
-    /// The checked-out work tree, or `None` for a bare repository.
-    pub work_tree: Option<PathBuf>,
+    /// The checked-out worktree, or `None` for a bare repository.
+    pub worktree: Option<PathBuf>,
 }
 
 impl RepositoryLocation {
-    /// The directory that opens this repository: the work tree, or the git directory when bare.
+    /// The directory that opens this repository: the worktree, or the git directory when bare.
     #[must_use = "returns the path; it is not used anywhere else"]
     pub fn root(&self) -> &Path {
-        self.work_tree.as_deref().unwrap_or(&self.git_dir)
+        self.worktree.as_deref().unwrap_or(&self.git_dir)
     }
 }
 
@@ -42,7 +42,7 @@ pub fn discover(path: &Path) -> Result<RepositoryLocation, GixError> {
 
     Ok(RepositoryLocation {
         git_dir: repo.git_dir().to_owned(),
-        work_tree: repo.workdir().map(Path::to_owned),
+        worktree: repo.workdir().map(Path::to_owned),
     })
 }
 

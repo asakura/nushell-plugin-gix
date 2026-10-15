@@ -19,12 +19,12 @@ use std::{any::Any, path::PathBuf};
 /// in a git-side registry keyed by this handle, is left for issue #21.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Repository {
-    /// Directory that opens the repository: its work tree, or the git directory when bare.
+    /// Directory that opens the repository: its worktree, or the git directory when bare.
     pub path: PathBuf,
     /// The repository's git directory.
     pub git_dir: PathBuf,
-    /// The checked-out work tree, or `None` for a bare repository.
-    pub work_tree: Option<PathBuf>,
+    /// The checked-out worktree, or `None` for a bare repository.
+    pub worktree: Option<PathBuf>,
 }
 
 impl PartialEq for Repository {
@@ -40,7 +40,7 @@ impl From<RepositoryLocation> for Repository {
         Self {
             path: location.root().to_owned(),
             git_dir: location.git_dir,
-            work_tree: location.work_tree,
+            worktree: location.worktree,
         }
     }
 }
@@ -64,7 +64,7 @@ impl CustomValue for Repository {
     }
 
     fn to_base_value(&self, span: Span) -> Result<Value, ShellError> {
-        let work_tree = self.work_tree.as_ref().map_or_else(
+        let worktree = self.worktree.as_ref().map_or_else(
             || Value::nothing(span),
             |dir| Value::string(dir.to_string_lossy(), span),
         );
@@ -73,7 +73,7 @@ impl CustomValue for Repository {
             record! {
                 "path" => Value::string(self.path.to_string_lossy(), span),
                 "git_dir" => Value::string(self.git_dir.to_string_lossy(), span),
-                "work_tree" => work_tree,
+                "worktree" => worktree,
             },
             span,
         ))
@@ -107,7 +107,7 @@ mod tests {
         Repository {
             path: PathBuf::from("/tmp/some/repo"),
             git_dir: PathBuf::from("/tmp/some/repo/.git"),
-            work_tree: Some(PathBuf::from("/tmp/some/repo")),
+            worktree: Some(PathBuf::from("/tmp/some/repo")),
         }
     }
 
@@ -144,7 +144,7 @@ mod tests {
         fn compares_git_dir_only() {
             let other = Repository {
                 path: PathBuf::from("/elsewhere"),
-                work_tree: None,
+                worktree: None,
                 ..repo()
             };
 
