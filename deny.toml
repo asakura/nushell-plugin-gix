@@ -1,0 +1,69 @@
+# cargo-deny configuration: https://embarkstudios.github.io/cargo-deny/
+#
+# Run locally with `nix develop -c cargo deny check` (or plain `cargo deny
+# check` if cargo-deny is installed). CI runs this as part of `ci.yml`.
+
+[graph]
+all-features = false
+no-default-features = false
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+]
+
+# https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
+[advisories]
+unsound = "all"
+unmaintained = "all"
+yanked = "warn"
+maximum-db-staleness = "P30D"
+unused-ignored-advisory = "warn"
+
+ignore = [
+  { id = "RUSTSEC-2026-0253", reason = "lru is pulled in by nu-protocol 0.112.2; no compatible fix until Nushell bumps it" },
+  { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is a build-time dependency of nu-derive-value; no replacement until Nushell migrates" },
+]
+
+# https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
+[licenses]
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  # allowed, but no matching crates yet
+  # "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC-PDDC",
+  # "BSL-1.0",
+  # "CC0-1.0",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+  "MPL-2.0",
+]
+confidence-threshold = 0.8
+include-dev = true
+unused-allowed-license = "warn"
+
+# https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
+[bans]
+multiple-versions = "warn"
+multiple-versions-include-dev = true
+wildcards = "deny"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+skip = []
+
+# https://embarkstudios.github.io/cargo-deny/checks/sources/cfg.html
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+required-git-spec = "rev"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+unused-allowed-source = "warn"
