@@ -1,6 +1,9 @@
 //! `gix open`: open a git repository, by default the one containing the current directory.
 
-use crate::{cdt::Repository, git};
+use crate::{
+    cdt::Repository,
+    git::{self, Registry},
+};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
 use nu_protocol::{Category, LabeledError, Signature, Spanned, SyntaxShape, Type, Value};
@@ -40,7 +43,7 @@ impl SimplePluginCommand for Open {
 
     fn run(
         &self,
-        _plugin: &GixPlugin,
+        plugin: &GixPlugin,
         engine: &EngineInterface,
         call: &EvaluatedCall,
         _input: &Value,
@@ -48,7 +51,7 @@ impl SimplePluginCommand for Open {
         let cwd = PathBuf::from(engine.get_current_dir()?);
         let repo = call.get_flag::<Spanned<PathBuf>>(REPO_FLAG)?;
 
-        run_open(&cwd, repo)
+        run_open(plugin.registry(), &cwd, repo)
             .map(|repo| repo.into_value(call.head))
             .map_err(|e| e.into_labeled(call.head))
     }
@@ -56,19 +59,27 @@ impl SimplePluginCommand for Open {
 
 /// Finds the repository for `repo` (resolved against `cwd`), or for `cwd` itself when no flag was given.
 ///
-/// The returned handle only records locations; nothing is cached, so every later command
-/// re-opens the repository. Keeping the opened repository in a plugin-side registry is left for issue #21.
-fn run_open(cwd: &Path, repo: Option<Spanned<PathBuf>>) -> Result<Repository, CommandError> {
-    match repo {
-        None => Ok(git::discover(cwd)?.into()),
-        Some(Spanned { item, span }) => git::discover(&cwd.join(&item))
-            .map(Repository::from)
-            .map_err(|source| CommandError::NotARepository {
+/// The repository is opened once and cached in `registry`; the returned handle carries the
+/// cache key plus the on-disk locations needed to rebuild it after a plugin restart.
+fn run_open(
+    registry: &Registry,
+    cwd: &Path,
+    repo: Option<Spanned<PathBuf>>,
+) -> Result<Repository, CommandError> {
+    let found = match repo {
+        None => git::discover(cwd)?,
+        Some(Spanned { item, span }) => {
+            git::discover(&cwd.join(&item)).map_err(|source| CommandError::NotARepository {
                 path: item,
                 span,
                 source,
-            }),
-    }
+            })?
+        }
+    };
+
+    let id = registry.register(&found)?;
+
+    Ok(Repository::new(id, found))
 }
 
 #[cfg(test)]
@@ -126,9 +137,26 @@ mod tests {
             repo_dir: Result<TempDir, TestError>,
         ) -> Result<(), TestError> {
             let dir = repo_dir?;
-            let handle = run_open(dir.path(), None)?;
+            let handle = run_open(&Registry::new(), dir.path(), None)?;
 
             assert_eq!(handle.path.canonicalize()?, dir.path().canonicalize()?);
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn caches_the_opened_repository(
+            repo_dir: Result<TempDir, TestError>,
+        ) -> Result<(), TestError> {
+            let dir = repo_dir?;
+            let registry = Registry::new();
+            let handle = run_open(&registry, dir.path(), None)?;
+
+            registry.release(handle.id);
+
+            let err = registry.acquire(handle.id, &handle.location());
+
+            assert!(err.is_ok(), "rebuild after release failed: {err:?}");
 
             Ok(())
         }
@@ -142,7 +170,11 @@ mod tests {
 
             gix::init(&nested)?;
 
-            let handle = run_open(dir.path(), Some(flag(Path::new("nested"))))?;
+            let handle = run_open(
+                &Registry::new(),
+                dir.path(),
+                Some(flag(Path::new("nested"))),
+            )?;
 
             assert_eq!(handle.path.canonicalize()?, nested.canonicalize()?);
 
@@ -155,9 +187,13 @@ mod tests {
         ) -> Result<(), TestError> {
             let dir = dir?;
 
-            let err = run_open(dir.path(), Some(flag(Path::new("missing"))))
-                .err()
-                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+            let err = run_open(
+                &Registry::new(),
+                dir.path(),
+                Some(flag(Path::new("missing"))),
+            )
+            .err()
+            .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
             assert!(
                 matches!(&err, CommandError::NotARepository { span, .. } if *span == Span::new(5, 9)),

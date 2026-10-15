@@ -44,7 +44,7 @@ impl PluginCommand for Log {
 
     fn run(
         &self,
-        _plugin: &GixPlugin,
+        plugin: &GixPlugin,
         engine: &EngineInterface,
         call: &EvaluatedCall,
         input: PipelineData,
@@ -59,8 +59,13 @@ impl PluginCommand for Log {
             .transpose()
             .map_err(|e| e.into_labeled(span))?;
 
+        let snapshot = plugin
+            .registry()
+            .acquire(repo.id, &repo.location())
+            .map_err(|e| CommandError::from(e).into_labeled(span))?;
+
         let commits =
-            git::log(&repo.path, limit).map_err(|e| CommandError::from(e).into_labeled(span))?;
+            git::log(snapshot, limit).map_err(|e| CommandError::from(e).into_labeled(span))?;
         let values = commits.map(move |commit| commit_value(commit, span));
 
         Ok(ListStream::new(values, span, engine.signals().clone()).into())
@@ -158,6 +163,7 @@ mod tests {
         #[rstest]
         fn accepts_gix_repository() -> Result<(), TestError> {
             let handle = Repository {
+                id: 1,
                 git_dir: PathBuf::from("/x/.git"),
                 worktree: None,
                 path: PathBuf::from("/tmp/r"),

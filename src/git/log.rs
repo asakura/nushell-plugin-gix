@@ -1,14 +1,16 @@
 //! Streaming commit history from a repository.
 
-use super::{GixError, open::open};
+use super::{GixError, Snapshot};
 
 use chrono::{DateTime, FixedOffset};
 use commit::simple;
 use gix::{revision::walk::Sorting, traverse::commit};
 
 use std::{
-    path::Path,
-    sync::mpsc::{self, Receiver, SyncSender},
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, SyncSender},
+    },
     thread,
 };
 
@@ -53,18 +55,16 @@ impl Iterator for CommitLog {
 ///
 /// # Errors
 ///
-/// Returns a [`GixError`] when the repository cannot be opened, HEAD has no commit, or the
+/// Returns a [`GixError`] when HEAD has no commit or the
 /// walker thread cannot be started. Failures while reading individual commits are yielded by
 /// the returned stream.
-pub fn log(path: &Path, limit: Option<usize>) -> Result<CommitLog, GixError> {
-    let repo = open(path)?;
-    let tip = repo.head_id().map_err(GixError::Head)?.detach();
-    let shared = repo.into_sync();
+pub fn log(snapshot: Arc<Snapshot>, limit: Option<usize>) -> Result<CommitLog, GixError> {
+    let tip = snapshot.repo().head_id().map_err(GixError::Head)?.detach();
     let (sender, receiver) = mpsc::sync_channel(CHANNEL_CAPACITY);
 
     thread::Builder::new()
         .name(WALKER_THREAD_NAME.to_owned())
-        .spawn(move || feed(&shared.to_thread_local(), tip, limit, &sender))
+        .spawn(move || feed(&snapshot.repo(), tip, limit, &sender))
         .map_err(GixError::Spawn)?;
 
     Ok(CommitLog { receiver })
@@ -140,11 +140,13 @@ fn commit_info(repo: &gix::Repository, id: gix::ObjectId) -> Result<CommitInfo, 
 mod tests {
     use super::*;
 
+    use crate::git::{Registry, discover};
+
     use gix::actor::SignatureRef;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
-    use std::io;
+    use std::{io, path::Path};
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {
@@ -201,8 +203,17 @@ mod tests {
         Ok(TempDir::new()?)
     }
 
+    /// A registered snapshot of the repository at `path`.
+    fn snapshot_of(path: &Path) -> Result<Arc<Snapshot>, TestError> {
+        let location = discover(path)?;
+        let registry = Registry::new();
+        let id = registry.register(&location)?;
+
+        Ok(registry.acquire(id, &location)?)
+    }
+
     fn collect(path: &Path, limit: Option<usize>) -> Result<Vec<CommitInfo>, TestError> {
-        Ok(log(path, limit)?.collect::<Result<_, _>>()?)
+        Ok(log(snapshot_of(path)?, limit)?.collect::<Result<_, _>>()?)
     }
 
     mod log {
@@ -271,7 +282,7 @@ mod tests {
 
             init_with_history(dir.path(), &HISTORY)?;
 
-            let mut stream = log(dir.path(), None)?;
+            let mut stream = log(snapshot_of(dir.path())?, None)?;
 
             let first = stream
                 .next()
@@ -291,7 +302,7 @@ mod tests {
 
             init_with_history(dir.path(), &[])?;
 
-            let err = log(dir.path(), None)
+            let err = log(snapshot_of(dir.path())?, None)
                 .err()
                 .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 

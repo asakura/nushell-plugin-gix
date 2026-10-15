@@ -15,6 +15,13 @@ pub enum GixError {
         source: gix::Error,
     },
 
+    /// The git directory of an opened repository no longer exists.
+    #[error("git repository at '{}' was moved or deleted", git_dir.display())]
+    RepositoryGone {
+        /// The git directory that disappeared.
+        git_dir: PathBuf,
+    },
+
     /// HEAD does not point at a commit (e.g. an empty repository).
     #[error("could not resolve HEAD")]
     Head(#[source] gix::Error),
