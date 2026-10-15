@@ -56,6 +56,9 @@ impl SimplePluginCommand for Open {
 }
 
 /// Finds the repository for `repo` (resolved against `cwd`), or for `cwd` itself when no flag was given.
+///
+/// The returned handle only records locations; nothing is cached, so every later command
+/// re-opens the repository. Keeping the opened repository in a plugin-side registry is left for issue #21.
 fn run_open(cwd: &Path, repo: Option<Spanned<PathBuf>>) -> Result<Repository, CommandError> {
     match repo {
         None => Ok(git::discover(cwd)?.into()),
