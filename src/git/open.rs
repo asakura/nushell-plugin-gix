@@ -75,14 +75,32 @@ mod tests {
         Ok(TempDir::new()?)
     }
 
+    /// A temporary directory holding a freshly initialised git repository.
+    #[fixture]
+    fn repo_dir(dir: Result<TempDir, TestError>) -> Result<TempDir, TestError> {
+        let dir = dir?;
+
+        gix::init(dir.path())?;
+
+        Ok(dir)
+    }
+
+    /// A temporary directory holding a freshly initialised bare repository.
+    #[fixture]
+    fn bare_repo_dir(dir: Result<TempDir, TestError>) -> Result<TempDir, TestError> {
+        let dir = dir?;
+
+        gix::init_bare(dir.path())?;
+
+        Ok(dir)
+    }
+
     mod discover {
         use super::*;
 
         #[rstest]
-        fn finds_repository_at_path(dir: Result<TempDir, TestError>) -> Result<(), TestError> {
-            let dir = dir?;
-            gix::init(dir.path())?;
-
+        fn finds_repository_at_path(repo_dir: Result<TempDir, TestError>) -> Result<(), TestError> {
+            let dir = repo_dir?;
             let location = discover(dir.path())?;
 
             assert_eq!(location.root().canonicalize()?, dir.path().canonicalize()?);
@@ -96,12 +114,11 @@ mod tests {
 
         #[rstest]
         fn finds_parent_repository_from_subdirectory(
-            dir: Result<TempDir, TestError>,
+            repo_dir: Result<TempDir, TestError>,
         ) -> Result<(), TestError> {
-            let dir = dir?;
-            gix::init(dir.path())?;
-
+            let dir = repo_dir?;
             let child = dir.path().join("sub").join("deeper");
+
             fs::create_dir_all(&child)?;
 
             let location = discover(&child)?;
@@ -112,15 +129,28 @@ mod tests {
         }
 
         #[rstest]
-        fn has_no_work_tree_for_bare_repository(
-            dir: Result<TempDir, TestError>,
+        fn normalises_parent_components(
+            repo_dir: Result<TempDir, TestError>,
         ) -> Result<(), TestError> {
-            let dir = dir?;
-            gix::init_bare(dir.path())?;
+            let dir = repo_dir?;
 
+            fs::create_dir_all(dir.path().join("other"))?;
+
+            let indirect = dir.path().join("other").join("..");
+
+            assert_eq!(discover(&indirect)?, discover(dir.path())?);
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn has_no_worktree_for_bare_repository(
+            bare_repo_dir: Result<TempDir, TestError>,
+        ) -> Result<(), TestError> {
+            let dir = bare_repo_dir?;
             let location = discover(dir.path())?;
 
-            assert_eq!(location.work_tree, None);
+            assert_eq!(location.worktree, None);
             assert_eq!(location.root(), location.git_dir);
 
             Ok(())
