@@ -1,8 +1,25 @@
-//! Opening and validating repositories.
+//! Opening and discovering repositories.
 
 use super::GixError;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Where an opened repository lives on disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepositoryLocation {
+    /// The repository's git directory (for a linked worktree, its private `worktrees/<name>` directory).
+    pub git_dir: PathBuf,
+    /// The checked-out work tree, or `None` for a bare repository.
+    pub work_tree: Option<PathBuf>,
+}
+
+impl RepositoryLocation {
+    /// The directory that opens this repository: the work tree, or the git directory when bare.
+    #[must_use = "returns the path; it is not used anywhere else"]
+    pub fn root(&self) -> &Path {
+        self.work_tree.as_deref().unwrap_or(&self.git_dir)
+    }
+}
 
 /// Opens the repository at exactly `path` (no parent-directory discovery).
 pub(super) fn open(path: &Path) -> Result<gix::Repository, GixError> {
@@ -12,13 +29,21 @@ pub(super) fn open(path: &Path) -> Result<gix::Repository, GixError> {
     })
 }
 
-/// Checks that `path` is a git repository.
+/// Finds the repository containing `path`, searching `path` and then its parents like git does.
 ///
 /// # Errors
 ///
-/// Returns [`GixError::Open`] when `path` is not a git repository.
-pub fn verify(path: &Path) -> Result<(), GixError> {
-    open(path).map(drop)
+/// Returns [`GixError::Open`] when neither `path` nor any parent is a git repository.
+pub fn discover(path: &Path) -> Result<RepositoryLocation, GixError> {
+    let repo = gix::discover(path).map_err(|source| GixError::Open {
+        path: path.to_owned(),
+        source,
+    })?;
+
+    Ok(RepositoryLocation {
+        git_dir: repo.git_dir().to_owned(),
+        work_tree: repo.workdir().map(Path::to_owned),
+    })
 }
 
 #[cfg(test)]
@@ -50,15 +75,53 @@ mod tests {
         Ok(TempDir::new()?)
     }
 
-    mod verify {
+    mod discover {
         use super::*;
 
         #[rstest]
-        fn accepts_existing_repository(dir: Result<TempDir, TestError>) -> Result<(), TestError> {
+        fn finds_repository_at_path(dir: Result<TempDir, TestError>) -> Result<(), TestError> {
             let dir = dir?;
-
             gix::init(dir.path())?;
-            verify(dir.path())?;
+
+            let location = discover(dir.path())?;
+
+            assert_eq!(location.root().canonicalize()?, dir.path().canonicalize()?);
+            assert_eq!(
+                location.git_dir.canonicalize()?,
+                dir.path().join(".git").canonicalize()?
+            );
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn finds_parent_repository_from_subdirectory(
+            dir: Result<TempDir, TestError>,
+        ) -> Result<(), TestError> {
+            let dir = dir?;
+            gix::init(dir.path())?;
+
+            let child = dir.path().join("sub").join("deeper");
+            fs::create_dir_all(&child)?;
+
+            let location = discover(&child)?;
+
+            assert_eq!(location.root().canonicalize()?, dir.path().canonicalize()?);
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn has_no_work_tree_for_bare_repository(
+            dir: Result<TempDir, TestError>,
+        ) -> Result<(), TestError> {
+            let dir = dir?;
+            gix::init_bare(dir.path())?;
+
+            let location = discover(dir.path())?;
+
+            assert_eq!(location.work_tree, None);
+            assert_eq!(location.root(), location.git_dir);
 
             Ok(())
         }
@@ -67,26 +130,11 @@ mod tests {
         fn rejects_plain_directory(dir: Result<TempDir, TestError>) -> Result<(), TestError> {
             let dir = dir?;
 
-            let err = verify(dir.path())
+            let err = discover(dir.path())
                 .err()
                 .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
             assert!(matches!(err, GixError::Open { .. }), "got {err:?}");
-
-            Ok(())
-        }
-
-        #[rstest]
-        fn does_not_discover_parent_repository(
-            dir: Result<TempDir, TestError>,
-        ) -> Result<(), TestError> {
-            let dir = dir?;
-            gix::init(dir.path())?;
-
-            let child = dir.path().join("sub");
-            fs::create_dir_all(&child)?;
-
-            assert!(matches!(verify(&child), Err(GixError::Open { .. })));
 
             Ok(())
         }

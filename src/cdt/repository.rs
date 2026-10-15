@@ -1,4 +1,6 @@
-//! The Nushell-side custom value returned by `gix open`; a plain path handle with no `gix` types.
+//! The Nushell-side custom value returned by `gix open`; a handle of on-disk locations with no `gix` types.
+
+use crate::git::RepositoryLocation;
 
 use nu_protocol::{CustomValue, ShellError, Span, Value, record};
 use serde::{Deserialize, Serialize};
@@ -7,13 +9,36 @@ use std::{any::Any, path::PathBuf};
 
 /// Handle to an opened git repository.
 ///
-/// Only the path is stored: `gix::Repository` is not serializable, and Nushell
-/// round-trips plugin custom values through MessagePack. Commands re-open the
-/// repository from this path on every invocation.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Only on-disk locations are stored: `gix::Repository` is not serializable, and
+/// Nushell round-trips plugin custom values through MessagePack. Commands re-open
+/// the repository from these fields, so the handle survives a plugin restart.
+/// Two handles are equal when they name the same git directory.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Repository {
-    /// Directory the repository was opened from.
+    /// Directory that opens the repository: its work tree, or the git directory when bare.
     pub path: PathBuf,
+    /// The repository's git directory.
+    pub git_dir: PathBuf,
+    /// The checked-out work tree, or `None` for a bare repository.
+    pub work_tree: Option<PathBuf>,
+}
+
+impl PartialEq for Repository {
+    fn eq(&self, other: &Self) -> bool {
+        self.git_dir == other.git_dir
+    }
+}
+
+impl Eq for Repository {}
+
+impl From<RepositoryLocation> for Repository {
+    fn from(location: RepositoryLocation) -> Self {
+        Self {
+            path: location.root().to_owned(),
+            git_dir: location.git_dir,
+            work_tree: location.work_tree,
+        }
+    }
 }
 
 impl Repository {
@@ -35,8 +60,17 @@ impl CustomValue for Repository {
     }
 
     fn to_base_value(&self, span: Span) -> Result<Value, ShellError> {
+        let work_tree = self.work_tree.as_ref().map_or_else(
+            || Value::nothing(span),
+            |dir| Value::string(dir.to_string_lossy(), span),
+        );
+
         Ok(Value::record(
-            record! { "path" => Value::string(self.path.to_string_lossy(), span) },
+            record! {
+                "path" => Value::string(self.path.to_string_lossy(), span),
+                "git_dir" => Value::string(self.git_dir.to_string_lossy(), span),
+                "work_tree" => work_tree,
+            },
             span,
         ))
     }
@@ -68,6 +102,8 @@ mod tests {
     fn repo() -> Repository {
         Repository {
             path: PathBuf::from("/tmp/some/repo"),
+            git_dir: PathBuf::from("/tmp/some/repo/.git"),
+            work_tree: Some(PathBuf::from("/tmp/some/repo")),
         }
     }
 
@@ -75,7 +111,7 @@ mod tests {
         use super::*;
 
         #[rstest]
-        fn is_a_record_with_the_path() -> Result<(), TestError> {
+        fn is_a_record_with_the_locations() -> Result<(), TestError> {
             let value = repo().to_base_value(Span::test_data())?;
             let record = value.as_record()?;
 
@@ -86,7 +122,39 @@ mod tests {
 
             assert_eq!(path, "/tmp/some/repo");
 
+            let git_dir = record
+                .get("git_dir")
+                .ok_or_else(|| TestError::Failure("missing git_dir column".to_owned()))?
+                .as_str()?;
+
+            assert_eq!(git_dir, "/tmp/some/repo/.git");
+
             Ok(())
+        }
+    }
+
+    mod eq {
+        use super::*;
+
+        #[rstest]
+        fn compares_git_dir_only() {
+            let other = Repository {
+                path: PathBuf::from("/elsewhere"),
+                work_tree: None,
+                ..repo()
+            };
+
+            assert_eq!(repo(), other);
+        }
+
+        #[rstest]
+        fn differs_for_other_git_dir() {
+            let other = Repository {
+                git_dir: PathBuf::from("/tmp/other/.git"),
+                ..repo()
+            };
+
+            assert_ne!(repo(), other);
         }
     }
 
