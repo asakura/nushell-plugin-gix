@@ -1,0 +1,14 @@
+# Complexity thresholds - prevent sprawling functions
+cognitive-complexity-threshold = 15
+type-complexity-threshold = 200
+too-many-lines-threshold = 100
+
+# Domain terms that shouldn't trigger spelling warnings in docs
+doc-valid-idents = [
+  "API",         # Application Programming Interface
+  "CLI",         # Command Line Interface
+  "JSON",        # JavaScript Object Notation
+  "Nushell",     # the shell this plugin targets
+  "gitoxide",
+  "MessagePack",
+]
