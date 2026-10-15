@@ -13,6 +13,10 @@ use std::{any::Any, path::PathBuf};
 /// Nushell round-trips plugin custom values through MessagePack. Commands re-open
 /// the repository from these fields, so the handle survives a plugin restart.
 /// Two handles are equal when they name the same git directory.
+///
+/// Opened `gix::Repository` state is deliberately not held here: it is not
+/// serializable and `src/cdt` must not touch `gix` types. Caching it plugin-side,
+/// in a git-side registry keyed by this handle, is left for issue #21.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Repository {
     /// Directory that opens the repository: its work tree, or the git directory when bare.
