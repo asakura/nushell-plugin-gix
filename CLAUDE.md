@@ -3,12 +3,7 @@
 # (lint levels live in Cargo.toml [lints.*]; clippy thresholds in clippy.toml)
 
 [deny]
-lints = ["all","pedantic","nursery","cargo","restriction",
-         "unwrap_used","expect_used","panic","todo","unimplemented","dbg",
-         "arithmetic_side_effects","indexing_slicing","str_to_string","absolute_paths",
-         "missing_debug_implementations","missing_copy_implementations","missing_docs",
-         "rustdoc::all","print_stdout","print_stderr","format_collect",
-         "allow_attributes","allow_attributes_without_reason","unfulfilled_lint_expectations"]
+lints = ["all","pedantic","nursery","cargo","restriction", "unwrap_used","expect_used","panic","todo","unimplemented","dbg", "arithmetic_side_effects","indexing_slicing","str_to_string","absolute_paths", "missing_debug_implementations","missing_copy_implementations","missing_docs", "rustdoc::all","print_stdout","print_stderr","format_collect", "allow_attributes","allow_attributes_without_reason","unfulfilled_lint_expectations"]
 forbid  = ["unsafe_code"]
 # allow_attributes is also deny — #[allow(...)] is itself a hard error
 suppress = "#[expect(clippy::foo, reason='…')]"
