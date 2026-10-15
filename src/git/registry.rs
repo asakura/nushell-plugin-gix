@@ -7,7 +7,7 @@ use super::{GixError, RepositoryLocation, open::open};
 
 use std::{
     collections::VecDeque,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
@@ -83,7 +83,7 @@ impl Registry {
         location: &RepositoryLocation,
     ) -> Result<Arc<Snapshot>, GixError> {
         if !location.git_dir.is_dir() {
-            self.release(id);
+            self.release(id, &location.git_dir);
 
             return Err(GixError::RepositoryGone {
                 git_dir: location.git_dir.clone(),
@@ -101,9 +101,13 @@ impl Registry {
         Ok(snapshot)
     }
 
-    /// Drops the entry for `id`, if any.
-    pub fn release(&self, id: u64) {
-        self.entries().retain(|entry| entry.id != id);
+    /// Drops the entry for `id` if it still caches the repository at `git_dir`.
+    ///
+    /// Repeated calls and calls for a handle whose id now belongs to another repository
+    /// (e.g. a stale handle from an earlier plugin process) leave other entries alone.
+    pub fn release(&self, id: u64, git_dir: &Path) {
+        self.entries()
+            .retain(|entry| !(entry.id == id && entry.snapshot.git_dir == git_dir));
     }
 
     fn entries(&self) -> MutexGuard<'_, VecDeque<Entry>> {
@@ -358,9 +362,41 @@ mod tests {
             let registry = Registry::new();
             let id = registry.register(&location)?;
 
-            registry.release(id);
+            registry.release(id, &location.git_dir);
 
             assert_eq!(cached(&registry), 0);
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn is_idempotent(repo_dir: Result<TempDir, TestError>) -> Result<(), TestError> {
+            let dir = repo_dir?;
+            let location = discover(dir.path())?;
+            let registry = Registry::new();
+            let id = registry.register(&location)?;
+
+            registry.release(id, &location.git_dir);
+            registry.release(id, &location.git_dir);
+
+            assert_eq!(cached(&registry), 0);
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn keeps_an_entry_that_names_another_repository(
+            repo_dir: Result<TempDir, TestError>,
+            other_repo_dir: Result<TempDir, TestError>,
+        ) -> Result<(), TestError> {
+            let (dir, other) = (repo_dir?, other_repo_dir?);
+            let (location, stale) = (discover(dir.path())?, discover(other.path())?);
+            let registry = Registry::new();
+            let id = registry.register(&location)?;
+
+            registry.release(id, &stale.git_dir);
+
+            assert_eq!(cached(&registry), 1);
 
             Ok(())
         }

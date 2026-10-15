@@ -53,7 +53,7 @@ impl Plugin for GixPlugin {
         custom_value: Box<dyn CustomValue>,
     ) -> Result<(), LabeledError> {
         if let Some(handle) = custom_value.as_any().downcast_ref::<cdt::Repository>() {
-            self.registry.release(handle.id);
+            self.registry.release(handle.id, &handle.git_dir);
         }
 
         Ok(())
