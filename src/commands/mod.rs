@@ -1,6 +1,7 @@
 //! Plugin commands.
 
+mod error;
 mod log;
 mod open;
 
-pub use self::{log::Log, open::Open};
+pub use self::{error::CommandError, log::Log, open::Open};

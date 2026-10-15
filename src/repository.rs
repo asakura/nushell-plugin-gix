@@ -1,4 +1,4 @@
-//! The custom Nushell value returned by `gix open` and consumed by the other commands.
+//! The Nushell-side custom value returned by `gix open`; a plain path handle with no `gix` types.
 
 use nu_protocol::{CustomValue, ShellError, Span, Value, record};
 use serde::{Deserialize, Serialize};

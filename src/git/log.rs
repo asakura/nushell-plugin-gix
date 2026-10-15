@@ -1,6 +1,6 @@
-//! Reading git history with `gix`; independent of Nushell types.
+//! Streaming commit history from a repository.
 
-use crate::error::GixError;
+use super::{GixError, open::open};
 
 use chrono::{DateTime, FixedOffset};
 use gix::{revision::walk::Sorting, traverse::commit::simple::CommitTimeOrder};
@@ -28,18 +28,6 @@ pub struct CommitInfo {
     pub time: DateTime<FixedOffset>,
     /// First line of the commit message.
     pub summary: String,
-}
-
-/// Opens the repository at exactly `path` (no parent-directory discovery).
-///
-/// # Errors
-///
-/// Returns [`GixError::Open`] when `path` is not a git repository.
-pub fn open(path: &Path) -> Result<gix::Repository, GixError> {
-    gix::open(path).map_err(|source| GixError::Open {
-        path: path.to_owned(),
-        source,
-    })
 }
 
 /// A lazily produced, newest-first sequence of commits.
@@ -214,33 +202,6 @@ mod tests {
 
     fn collect(path: &Path, limit: Option<usize>) -> Result<Vec<CommitInfo>, TestError> {
         Ok(log(path, limit)?.collect::<Result<_, _>>()?)
-    }
-
-    mod open {
-        use super::*;
-
-        #[rstest]
-        fn opens_existing_repository(dir: Result<TempDir, TestError>) -> Result<(), TestError> {
-            let dir = dir?;
-
-            init_with_history(dir.path(), &[])?;
-            open(dir.path())?;
-
-            Ok(())
-        }
-
-        #[rstest]
-        fn rejects_plain_directory(dir: Result<TempDir, TestError>) -> Result<(), TestError> {
-            let dir = dir?;
-
-            let err = open(dir.path())
-                .err()
-                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
-
-            assert!(matches!(err, GixError::Open { .. }), "got {err:?}");
-
-            Ok(())
-        }
     }
 
     mod log {

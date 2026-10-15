@@ -1,13 +1,13 @@
 //! `gix open`: open the git repository in the current directory.
 
-use crate::{error::GixError, git, repository::GixRepository};
+use crate::{git, repository::GixRepository};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
 use nu_protocol::{Category, LabeledError, Signature, Type, Value};
 
 use std::path::PathBuf;
 
-use super::super::GixPlugin;
+use super::{super::GixPlugin, CommandError};
 
 /// Opens the repository in the shell's current directory.
 #[derive(Clone, Copy, Debug)]
@@ -46,14 +46,16 @@ impl SimplePluginCommand for Open {
 }
 
 /// Validates that `path` is a repository and returns a handle to it.
-fn run_open(path: PathBuf) -> Result<GixRepository, GixError> {
-    git::open(&path)?;
+fn run_open(path: PathBuf) -> Result<GixRepository, CommandError> {
+    git::verify(&path)?;
     Ok(GixRepository { path })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::git::GixError;
 
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
@@ -69,7 +71,7 @@ mod tests {
         Gix(#[from] gix::Error),
 
         #[error(transparent)]
-        Git(#[from] GixError),
+        Command(#[from] CommandError),
 
         #[error("Test failure: {0}")]
         Failure(String),
@@ -112,7 +114,7 @@ mod tests {
                 .err()
                 .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
-            assert!(matches!(err, GixError::Open { .. }));
+            assert!(matches!(err, CommandError::Git(GixError::Open { .. })));
 
             Ok(())
         }

@@ -13,7 +13,6 @@
 )]
 
 mod commands;
-mod error;
 mod git;
 mod repository;
 

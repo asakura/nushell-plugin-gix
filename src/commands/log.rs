@@ -1,8 +1,7 @@
 //! `gix log`: stream the commits of an opened repository as a Nushell `ListStream`.
 
 use crate::{
-    error::GixError,
-    git::{self, CommitInfo},
+    git::{self, CommitInfo, GixError},
     repository::GixRepository,
 };
 
@@ -12,7 +11,7 @@ use nu_protocol::{
     SyntaxShape, Type, Value, record,
 };
 
-use super::super::GixPlugin;
+use super::{super::GixPlugin, CommandError};
 
 const LIMIT_FLAG: &str = "limit";
 
@@ -60,7 +59,8 @@ impl PluginCommand for Log {
             .transpose()
             .map_err(|e| e.into_labeled(span))?;
 
-        let commits = git::log(&repo.path, limit).map_err(|e| e.into_labeled(span))?;
+        let commits =
+            git::log(&repo.path, limit).map_err(|e| CommandError::from(e).into_labeled(span))?;
         let values = commits.map(move |commit| commit_value(commit, span));
 
         Ok(ListStream::new(values, span, engine.signals().clone()).into())
@@ -80,8 +80,8 @@ fn repository_from(input: &Value) -> Result<&GixRepository, LabeledError> {
         })
 }
 
-fn parse_limit(limit: i64) -> Result<usize, GixError> {
-    usize::try_from(limit).map_err(|_not_unsigned| GixError::NegativeLimit(limit))
+fn parse_limit(limit: i64) -> Result<usize, CommandError> {
+    usize::try_from(limit).map_err(|_not_unsigned| CommandError::NegativeLimit(limit))
 }
 
 /// Maps one streamed commit to a table row, or to an error value that ends the stream.
@@ -89,7 +89,7 @@ fn commit_value(commit: Result<CommitInfo, GixError>, span: Span) -> Value {
     match commit {
         Ok(commit) => commit_record(commit, span),
         Err(err) => Value::error(
-            ShellError::LabeledError(Box::new(err.into_labeled(span))),
+            ShellError::LabeledError(Box::new(CommandError::from(err).into_labeled(span))),
             span,
         ),
     }
@@ -122,7 +122,7 @@ mod tests {
         Shell(#[from] ShellError),
 
         #[error(transparent)]
-        Git(#[from] GixError),
+        Command(#[from] CommandError),
 
         #[error("Test failure: {0}")]
         Failure(String),
@@ -145,7 +145,10 @@ mod tests {
 
         #[rstest]
         fn rejects_negative() {
-            assert!(matches!(parse_limit(-1), Err(GixError::NegativeLimit(-1))));
+            assert!(matches!(
+                parse_limit(-1),
+                Err(CommandError::NegativeLimit(-1))
+            ));
         }
     }
 
@@ -185,7 +188,12 @@ mod tests {
 
         #[rstest]
         fn turns_errors_into_error_values() {
-            let value = commit_value(Err(GixError::NegativeLimit(-1)), Span::test_data());
+            let value = commit_value(
+                Err(GixError::Timestamp {
+                    id: "abc".to_owned(),
+                }),
+                Span::test_data(),
+            );
 
             assert!(matches!(value, Value::Error { .. }));
         }
