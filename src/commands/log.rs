@@ -11,7 +11,7 @@ use nu_protocol::{
     SyntaxShape, Type, Value, record,
 };
 
-use super::{super::GixPlugin, CommandError};
+use super::{super::GixPlugin, CommandError, handle_from};
 
 const LIMIT_FLAG: &str = "limit";
 
@@ -51,7 +51,7 @@ impl PluginCommand for Log {
     ) -> Result<PipelineData, LabeledError> {
         let span = call.head;
         let input = input.into_value(span)?;
-        let repo = repository_from(&input)?;
+        let repo = handle_from::<Repository>(&input).map_err(|e| e.into_labeled(span))?;
 
         let limit = call
             .get_flag::<i64>(LIMIT_FLAG)?
@@ -70,19 +70,6 @@ impl PluginCommand for Log {
 
         Ok(ListStream::new(values, span, engine.signals().clone()).into())
     }
-}
-
-/// Extracts the repository handle from pipeline input.
-fn repository_from(input: &Value) -> Result<&Repository, LabeledError> {
-    input
-        .as_custom_value()
-        .ok()
-        .and_then(|custom| custom.as_any().downcast_ref::<Repository>())
-        .ok_or_else(|| {
-            LabeledError::new("expected a `git repository` value")
-                .with_label(format!("got {}", input.get_type()), input.span())
-                .with_help("pipe the output of `gix open` into this command")
-        })
 }
 
 fn parse_limit(limit: i64) -> Result<usize, CommandError> {
@@ -119,8 +106,6 @@ mod tests {
     use nu_protocol::ShellError;
     use rstest::rstest;
 
-    use std::path::PathBuf;
-
     #[derive(Debug, thiserror::Error)]
     enum TestError {
         #[error(transparent)]
@@ -154,40 +139,6 @@ mod tests {
                 parse_limit(-1),
                 Err(CommandError::NegativeLimit(-1))
             ));
-        }
-    }
-
-    mod repository_from {
-        use super::*;
-
-        #[rstest]
-        fn accepts_gix_repository() -> Result<(), TestError> {
-            let handle = Repository {
-                id: 1,
-                git_dir: PathBuf::from("/x/.git"),
-                worktree: None,
-                path: PathBuf::from("/tmp/r"),
-            };
-
-            let input = handle.clone().into_value(Span::test_data());
-            let found = repository_from(&input).map_err(|e| TestError::Failure(e.to_string()))?;
-
-            assert_eq!(found, &handle);
-
-            Ok(())
-        }
-
-        #[rstest]
-        fn rejects_other_values() -> Result<(), TestError> {
-            let input = Value::int(1, Span::test_data());
-
-            let err = repository_from(&input)
-                .err()
-                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
-
-            assert_eq!(err.msg, "expected a `git repository` value");
-
-            Ok(())
         }
     }
 

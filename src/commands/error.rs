@@ -6,6 +6,19 @@ use nu_protocol::{LabeledError, Span};
 
 use std::{error::Error as _, path::PathBuf};
 
+/// What a command needed and what its pipeline input actually was.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WrongInput {
+    /// Nushell type name the command expects.
+    pub expected: &'static str,
+    /// How to obtain a value of that type.
+    pub hint: &'static str,
+    /// Nushell type name of what was received.
+    pub got: String,
+    /// Span of the offending input.
+    pub span: Span,
+}
+
 /// Errors a command can raise: invalid arguments or a failure in the git layer.
 #[derive(Debug, thiserror::Error)]
 pub enum CommandError {
@@ -25,6 +38,10 @@ pub enum CommandError {
         source: GixError,
     },
 
+    /// The pipeline input is not the handle type the command works on.
+    #[error("expected a `{}` value", .0.expected)]
+    WrongInput(WrongInput),
+
     /// A negative value was given for the commit limit.
     #[error("limit must not be negative, got {0}")]
     NegativeLimit(i64),
@@ -41,7 +58,7 @@ impl CommandError {
                 span: _span,
                 source: found,
             } => found.source(),
-            Self::Git(_) | Self::NegativeLimit(_) => self.source(),
+            Self::Git(_) | Self::NegativeLimit(_) | Self::WrongInput(_) => self.source(),
         };
 
         while let Some(err) = source {
@@ -51,10 +68,15 @@ impl CommandError {
 
         let span = self.own_span().unwrap_or(span);
 
-        let labeled = Self::label(&self).map_or_else(
-            || LabeledError::new(self.to_string()),
-            |label| LabeledError::new(self.to_string()).with_label(label, span),
-        );
+        let labeled = match &self {
+            Self::WrongInput(input) => LabeledError::new(self.to_string())
+                .with_label(format!("got {}", input.got), span)
+                .with_help(input.hint),
+            _ => Self::label(&self).map_or_else(
+                || LabeledError::new(self.to_string()),
+                |label| LabeledError::new(self.to_string()).with_label(label, span),
+            ),
+        };
 
         if chain.is_empty() {
             labeled
@@ -70,6 +92,7 @@ impl CommandError {
                 path: _path,
                 source: _source,
             } => Some(*flag_span),
+            Self::WrongInput(input) => Some(input.span),
             Self::Git(_) | Self::NegativeLimit(_) => None,
         }
     }
@@ -94,7 +117,7 @@ impl CommandError {
                 "the repository is no longer at this location; run `gix open` again if it moved",
             ),
             Self::Git(GixError::Head(_)) => Some("the repository may have no commits yet"),
-            Self::Git(_) => None,
+            Self::WrongInput(_) | Self::Git(_) => None,
         }
     }
 }
@@ -126,6 +149,26 @@ mod tests {
 
     mod into_labeled {
         use super::*;
+
+        #[rstest]
+        fn points_wrong_input_at_the_input() {
+            let input_span = Span::new(3, 9);
+            let err = CommandError::WrongInput(WrongInput {
+                expected: "git repository",
+                hint: "pipe the output of `gix open` into this command",
+                got: "int".to_owned(),
+                span: input_span,
+            });
+
+            let labeled = err.into_labeled(Span::test_data());
+
+            assert_eq!(labeled.msg, "expected a `git repository` value");
+            assert_eq!(labeled.labels.first().map(|l| l.span), Some(input_span));
+            assert_eq!(
+                labeled.help.as_deref(),
+                Some("pipe the output of `gix open` into this command")
+            );
+        }
 
         #[rstest]
         fn keeps_message_and_label() {

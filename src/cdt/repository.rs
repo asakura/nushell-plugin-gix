@@ -1,6 +1,6 @@
 //! The Nushell-side custom value returned by `gix open`; a handle of on-disk locations with no `gix` types.
 
-use crate::git::RepositoryLocation;
+use crate::{cdt::Handle, git::RepositoryLocation};
 
 use nu_protocol::{CustomValue, ShellError, Span, Value, record};
 use serde::{Deserialize, Serialize};
@@ -66,6 +66,11 @@ impl Repository {
     }
 }
 
+impl Handle for Repository {
+    const TYPE_NAME: &'static str = "git repository";
+    const OBTAINED_BY: &'static str = "pipe the output of `gix open` into this command";
+}
+
 #[typetag::serde]
 impl CustomValue for Repository {
     fn clone_value(&self, span: Span) -> Value {
@@ -77,7 +82,7 @@ impl CustomValue for Repository {
     }
 
     fn type_name(&self) -> String {
-        "git repository".to_owned()
+        Self::TYPE_NAME.to_owned()
     }
 
     fn to_base_value(&self, span: Span) -> Result<Value, ShellError> {
