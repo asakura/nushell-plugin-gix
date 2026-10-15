@@ -3,9 +3,11 @@
 mod error;
 mod log;
 mod open;
+mod registry;
 
 pub use self::{
     error::GixError,
     log::{CommitInfo, log},
     open::{RepositoryLocation, discover},
+    registry::{Registry, Snapshot},
 };

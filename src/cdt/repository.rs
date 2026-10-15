@@ -15,10 +15,13 @@ use std::{any::Any, path::PathBuf};
 /// Two handles are equal when they name the same git directory.
 ///
 /// Opened `gix::Repository` state is deliberately not held here: it is not
-/// serializable and `src/cdt` must not touch `gix` types. Caching it plugin-side,
-/// in a git-side registry keyed by this handle, is left for issue #21.
+/// serializable and `src/cdt` must not touch `gix` types. It is cached plugin-side
+/// in the git-side [`Registry`](crate::git::Registry), keyed by `id`; after a plugin
+/// restart the cache is empty and is rebuilt from the other fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Repository {
+    /// Key of this handle's entry in the plugin-side registry; only meaningful to the plugin process that issued it.
+    pub id: u64,
     /// Directory that opens the repository: its worktree, or the git directory when bare.
     pub path: PathBuf,
     /// The repository's git directory.
@@ -35,17 +38,27 @@ impl PartialEq for Repository {
 
 impl Eq for Repository {}
 
-impl From<RepositoryLocation> for Repository {
-    fn from(location: RepositoryLocation) -> Self {
+impl Repository {
+    /// Builds the handle `id` for the repository found at `location`.
+    #[must_use = "returns the handle; it is not emitted anywhere"]
+    pub fn new(id: u64, location: RepositoryLocation) -> Self {
         Self {
+            id,
             path: location.root().to_owned(),
             git_dir: location.git_dir,
             worktree: location.worktree,
         }
     }
-}
 
-impl Repository {
+    /// The on-disk location this handle names, from which its state can be rebuilt.
+    #[must_use = "returns the location; the handle is unchanged"]
+    pub fn location(&self) -> RepositoryLocation {
+        RepositoryLocation {
+            git_dir: self.git_dir.clone(),
+            worktree: self.worktree.clone(),
+        }
+    }
+
     /// Wraps `path` as a Nushell value spanning `span`.
     #[must_use = "returns the custom value; it is not emitted anywhere"]
     pub fn into_value(self, span: Span) -> Value {
@@ -57,6 +70,10 @@ impl Repository {
 impl CustomValue for Repository {
     fn clone_value(&self, span: Span) -> Value {
         self.clone().into_value(span)
+    }
+
+    fn notify_plugin_on_drop(&self) -> bool {
+        true
     }
 
     fn type_name(&self) -> String {
@@ -105,6 +122,7 @@ mod tests {
 
     fn repo() -> Repository {
         Repository {
+            id: 7,
             path: PathBuf::from("/tmp/some/repo"),
             git_dir: PathBuf::from("/tmp/some/repo/.git"),
             worktree: Some(PathBuf::from("/tmp/some/repo")),
@@ -159,6 +177,27 @@ mod tests {
             };
 
             assert_ne!(repo(), other);
+        }
+    }
+
+    mod location {
+        use super::*;
+
+        #[rstest]
+        fn round_trips_through_new() {
+            let handle = repo();
+
+            assert_eq!(Repository::new(7, handle.location()), handle);
+            assert_eq!(Repository::new(7, handle.location()).path, handle.path);
+        }
+    }
+
+    mod notify_plugin_on_drop {
+        use super::*;
+
+        #[rstest]
+        fn is_enabled() {
+            assert!(repo().notify_plugin_on_drop());
         }
     }
 

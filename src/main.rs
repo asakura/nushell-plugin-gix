@@ -16,11 +16,23 @@ mod cdt;
 mod commands;
 mod git;
 
-use nu_plugin::{MsgPackSerializer, Plugin, PluginCommand, serve_plugin};
+use git::Registry;
+
+use nu_plugin::{EngineInterface, MsgPackSerializer, Plugin, PluginCommand, serve_plugin};
+use nu_protocol::{CustomValue, LabeledError};
 
 /// The plugin entry point registered with Nushell.
-#[derive(Clone, Copy, Debug)]
-pub struct GixPlugin;
+#[derive(Debug, Default)]
+pub struct GixPlugin {
+    registry: Registry,
+}
+
+impl GixPlugin {
+    /// The cache of repositories opened by live handles.
+    pub const fn registry(&self) -> &Registry {
+        &self.registry
+    }
+}
 
 impl Plugin for GixPlugin {
     fn version(&self) -> String {
@@ -34,8 +46,20 @@ impl Plugin for GixPlugin {
             Box::new(commands::Log),
         ]
     }
+
+    fn custom_value_dropped(
+        &self,
+        _engine: &EngineInterface,
+        custom_value: Box<dyn CustomValue>,
+    ) -> Result<(), LabeledError> {
+        if let Some(handle) = custom_value.as_any().downcast_ref::<cdt::Repository>() {
+            self.registry.release(handle.id);
+        }
+
+        Ok(())
+    }
 }
 
 fn main() {
-    serve_plugin(&GixPlugin, MsgPackSerializer);
+    serve_plugin(&GixPlugin::default(), MsgPackSerializer);
 }
