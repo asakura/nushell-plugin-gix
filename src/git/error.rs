@@ -5,7 +5,17 @@ use std::{io, path::PathBuf};
 /// Errors produced while opening a repository or reading its history.
 #[derive(Debug, thiserror::Error)]
 pub enum GixError {
-    /// `gix` failed to open the repository.
+    /// No repository contains `path`, neither the directory itself nor any of its parents.
+    #[error("no git repository found in '{}' or any parent directory", path.display())]
+    NotFound {
+        /// The directory the search started from.
+        path: PathBuf,
+        /// The underlying `gix` error.
+        #[source]
+        source: gix::Error,
+    },
+
+    /// `gix` failed to open a repository that was found.
     #[error("could not open git repository at '{}'", path.display())]
     Open {
         /// The directory that was opened.
