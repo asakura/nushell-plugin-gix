@@ -1,15 +1,17 @@
-//! `gix open`: open the git repository in the current directory.
+//! `gix open`: open a git repository, by default the one containing the current directory.
 
 use crate::{cdt::Repository, git};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
-use nu_protocol::{Category, LabeledError, Signature, Type, Value};
+use nu_protocol::{Category, LabeledError, Signature, Spanned, SyntaxShape, Type, Value};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{super::GixPlugin, CommandError};
 
-/// Opens the repository in the shell's current directory.
+const REPO_FLAG: &str = "repo";
+
+/// Opens the repository containing the current directory, or the one named by `--repo`.
 #[derive(Clone, Copy, Debug)]
 pub struct Open;
 
@@ -21,11 +23,17 @@ impl SimplePluginCommand for Open {
     }
 
     fn description(&self) -> &'static str {
-        "Open the git repository in the current directory."
+        "Open a git repository: the one containing the current directory, or the one at --repo."
     }
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
+            .named(
+                REPO_FLAG,
+                SyntaxShape::Filepath,
+                "open the repository at this path (relative to the current directory)",
+                Some('r'),
+            )
             .input_output_type(Type::Nothing, Type::Custom("git repository".into()))
             .category(Category::Custom("gix".into()))
     }
@@ -39,16 +47,26 @@ impl SimplePluginCommand for Open {
     ) -> Result<Value, LabeledError> {
         let cwd = PathBuf::from(engine.get_current_dir()?);
 
-        run_open(cwd)
+        let repo = call.get_flag::<Spanned<PathBuf>>(REPO_FLAG)?;
+
+        run_open(&cwd, repo)
             .map(|repo| repo.into_value(call.head))
             .map_err(|e| e.into_labeled(call.head))
     }
 }
 
-/// Validates that `path` is a repository and returns a handle to it.
-fn run_open(path: PathBuf) -> Result<Repository, CommandError> {
-    git::verify(&path)?;
-    Ok(Repository { path })
+/// Finds the repository for `repo` (resolved against `cwd`), or for `cwd` itself when no flag was given.
+fn run_open(cwd: &Path, repo: Option<Spanned<PathBuf>>) -> Result<Repository, CommandError> {
+    match repo {
+        None => Ok(git::discover(cwd)?.into()),
+        Some(Spanned { item, span }) => git::discover(&cwd.join(&item))
+            .map(Repository::from)
+            .map_err(|source| CommandError::NotARepository {
+                path: item,
+                span,
+                source,
+            }),
+    }
 }
 
 #[cfg(test)]
@@ -60,7 +78,8 @@ mod tests {
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
-    use std::io;
+    use nu_protocol::Span;
+    use std::{fs, io};
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {
@@ -91,6 +110,13 @@ mod tests {
         Ok(dir)
     }
 
+    fn flag(path: &Path) -> Spanned<PathBuf> {
+        Spanned {
+            item: path.to_owned(),
+            span: Span::new(5, 9),
+        }
+    }
+
     mod run_open {
         use super::*;
 
@@ -99,9 +125,61 @@ mod tests {
             repo_dir: Result<TempDir, TestError>,
         ) -> Result<(), TestError> {
             let dir = repo_dir?;
-            let handle = run_open(dir.path().to_owned())?;
+            let handle = run_open(dir.path(), None)?;
 
-            assert_eq!(handle.path, dir.path());
+            assert_eq!(handle.path.canonicalize()?, dir.path().canonicalize()?);
+            assert_eq!(
+                handle
+                    .work_tree
+                    .as_deref()
+                    .map(Path::canonicalize)
+                    .transpose()?,
+                Some(dir.path().canonicalize()?)
+            );
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn discovers_parent_from_subdirectory(
+            repo_dir: Result<TempDir, TestError>,
+        ) -> Result<(), TestError> {
+            let dir = repo_dir?;
+            let sub = dir.path().join("a").join("b");
+            fs::create_dir_all(&sub)?;
+
+            let handle = run_open(&sub, None)?;
+
+            assert_eq!(handle.path.canonicalize()?, dir.path().canonicalize()?);
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn opens_absolute_repo_flag_from_any_directory(
+            repo_dir: Result<TempDir, TestError>,
+            dir: Result<TempDir, TestError>,
+        ) -> Result<(), TestError> {
+            let (repo, elsewhere) = (repo_dir?, dir?);
+
+            let handle = run_open(elsewhere.path(), Some(flag(repo.path())))?;
+
+            assert_eq!(handle.path.canonicalize()?, repo.path().canonicalize()?);
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn resolves_relative_repo_flag_against_cwd(
+            repo_dir: Result<TempDir, TestError>,
+        ) -> Result<(), TestError> {
+            let dir = repo_dir?;
+            let nested = dir.path().join("nested");
+            gix::init(&nested)?;
+
+            let handle = run_open(dir.path(), Some(flag(Path::new("nested"))))?;
+
+            assert_eq!(handle.path.canonicalize()?, nested.canonicalize()?);
 
             Ok(())
         }
@@ -110,11 +188,29 @@ mod tests {
         fn fails_outside_a_repository(dir: Result<TempDir, TestError>) -> Result<(), TestError> {
             let dir = dir?;
 
-            let err = run_open(dir.path().to_owned())
+            let err = run_open(dir.path(), None)
                 .err()
                 .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
             assert!(matches!(err, CommandError::Git(GixError::Open { .. })));
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn reports_flag_span_for_non_repository(
+            dir: Result<TempDir, TestError>,
+        ) -> Result<(), TestError> {
+            let dir = dir?;
+
+            let err = run_open(dir.path(), Some(flag(Path::new("missing"))))
+                .err()
+                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+            assert!(
+                matches!(&err, CommandError::NotARepository { span, .. } if *span == Span::new(5, 9)),
+                "got {err:?}"
+            );
 
             Ok(())
         }

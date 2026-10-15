@@ -7,5 +7,5 @@ mod open;
 pub use self::{
     error::GixError,
     log::{CommitInfo, log},
-    open::verify,
+    open::{RepositoryLocation, discover},
 };
