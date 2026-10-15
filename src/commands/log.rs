@@ -62,7 +62,7 @@ impl PluginCommand for Log {
         let snapshot = plugin
             .registry()
             .acquire(repo.id, &repo.location())
-            .map_err(|e| CommandError::from(e).into_labeled(span))?;
+            .map_err(|e| CommandError::from(e).into_labeled(input.span()))?;
 
         let commits =
             git::log(snapshot, limit).map_err(|e| CommandError::from(e).into_labeled(span))?;
