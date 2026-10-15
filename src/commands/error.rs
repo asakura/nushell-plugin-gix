@@ -79,9 +79,9 @@ impl CommandError {
                 path: _path,
                 source: _source,
             }) => Some("run this from inside a git repository"),
-            Self::Git(GixError::RepositoryGone { git_dir: _git_dir }) => {
-                Some("run `gix open` again to get a fresh handle")
-            }
+            Self::Git(GixError::RepositoryGone { git_dir: _git_dir }) => Some(
+                "the repository is no longer at this location; run `gix open` again if it moved",
+            ),
             Self::Git(GixError::Head(_)) => Some("the repository may have no commits yet"),
             Self::Git(_) => None,
         }
