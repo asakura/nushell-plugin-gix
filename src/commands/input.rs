@@ -69,7 +69,7 @@ mod tests {
                 .err()
                 .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
-            assert!(matches!(err, CommandError::WrongInput(ref w) if w.got == got));
+            assert!(matches!(&err, CommandError::WrongInput(w) if w.got == got));
 
             Ok(())
         }
