@@ -1,0 +1,35 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "semanticCommits": "enabled",
+  "nix": {
+    "enabled": true
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Bump tag-pinned pkgs.fetchFromGitHub sources in flake.nix and nix/*.nix",
+      "managerFilePatterns": ["/(^|/)(flake\\.nix|nix/[^/]+\\.nix)$/"],
+      "matchStrings": [
+        "owner\\s*=\\s*\"(?<owner>[^\"]+)\";\\s*repo\\s*=\\s*\"(?<repo>[^\"]+)\";\\s*rev\\s*=\\s*\"(?<currentValue>v[^\"]+)\";"
+      ],
+      "datasourceTemplate": "github-tags",
+      "depNameTemplate": "{{{owner}}}/{{{repo}}}",
+      "packageNameTemplate": "{{{owner}}}/{{{repo}}}"
+    },
+    {
+      "customType": "regex",
+      "description": "Bump commit-pinned pkgs.fetchFromGitHub sources in flake.nix and nix/*.nix (no tagged releases)",
+      "managerFilePatterns": ["/(^|/)(flake\\.nix|nix/[^/]+\\.nix)$/"],
+      "matchStrings": [
+        "owner\\s*=\\s*\"(?<owner>[^\"]+)\";\\s*repo\\s*=\\s*\"(?<repo>[^\"]+)\";\\s*rev\\s*=\\s*\"(?<currentDigest>[0-9a-f]{40})\";"
+      ],
+      "datasourceTemplate": "git-refs",
+      "currentValueTemplate": "main",
+      "depNameTemplate": "{{{owner}}}/{{{repo}}}",
+      "packageNameTemplate": "https://github.com/{{{owner}}}/{{{repo}}}"
+    }
+  ]
+}
