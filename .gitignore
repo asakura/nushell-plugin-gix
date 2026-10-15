@@ -1,0 +1,7 @@
+/target/
+**/*.rs.bk
+/result
+/result-*
+.direnv/
+/*.patch
+/.pre-commit-config.yaml
