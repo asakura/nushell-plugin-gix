@@ -15,7 +15,7 @@ use std::{
     },
 };
 
-/// Snapshots kept before the least recently used one is evicted.
+/// Entries kept before the least recently used one is evicted.
 const CAPACITY: usize = 16;
 
 /// Ids start at `pid * ID_STRIDE`, so ids from a previous plugin process rarely collide with new ones.
@@ -23,12 +23,12 @@ const ID_STRIDE: u64 = 1 << 32;
 
 /// An opened repository shared between commands; `gix` types never leave the git side.
 #[derive(Debug)]
-pub struct Snapshot {
+pub struct OpenRepository {
     git_dir: PathBuf,
     repo: gix::ThreadSafeRepository,
 }
 
-impl Snapshot {
+impl OpenRepository {
     /// A repository handle for the calling thread.
     pub(super) fn repo(&self) -> gix::Repository {
         self.repo.to_thread_local()
@@ -38,10 +38,10 @@ impl Snapshot {
 #[derive(Debug)]
 struct Entry {
     id: u64,
-    snapshot: Arc<Snapshot>,
+    opened: Arc<OpenRepository>,
 }
 
-/// Bounded LRU map from handle id to [`Snapshot`].
+/// Bounded LRU map from handle id to [`OpenRepository`].
 #[derive(Debug)]
 pub struct Registry {
     next_id: AtomicU64,
@@ -71,7 +71,7 @@ impl Registry {
         Ok(id)
     }
 
-    /// Returns the cached snapshot for `id`, rebuilding it from `location` on a cache miss.
+    /// Returns the cached repository for `id`, rebuilding it from `location` on a cache miss.
     ///
     /// # Errors
     ///
@@ -81,7 +81,7 @@ impl Registry {
         &self,
         id: u64,
         location: &RepositoryLocation,
-    ) -> Result<Arc<Snapshot>, GixError> {
+    ) -> Result<Arc<OpenRepository>, GixError> {
         if !location.git_dir.is_dir() {
             self.release(id, &location.git_dir);
 
@@ -90,15 +90,15 @@ impl Registry {
             });
         }
 
-        if let Some(snapshot) = self.lookup(id, location) {
-            return Ok(snapshot);
+        if let Some(opened) = self.lookup(id, location) {
+            return Ok(opened);
         }
 
-        let snapshot = Arc::new(load(location)?);
+        let opened = Arc::new(load(location)?);
 
-        self.insert(id, Arc::clone(&snapshot));
+        self.insert(id, Arc::clone(&opened));
 
-        Ok(snapshot)
+        Ok(opened)
     }
 
     /// Drops the entry for `id` if it still caches the repository at `git_dir`.
@@ -107,7 +107,7 @@ impl Registry {
     /// (e.g. a stale handle from an earlier plugin process) leave other entries alone.
     pub fn release(&self, id: u64, git_dir: &Path) {
         self.entries()
-            .retain(|entry| !(entry.id == id && entry.snapshot.git_dir == git_dir));
+            .retain(|entry| !(entry.id == id && entry.opened.git_dir == git_dir));
     }
 
     fn entries(&self) -> MutexGuard<'_, VecDeque<Entry>> {
@@ -115,26 +115,26 @@ impl Registry {
     }
 
     /// Finds the entry for `id` that still names `location`'s git directory and marks it most recently used.
-    fn lookup(&self, id: u64, location: &RepositoryLocation) -> Option<Arc<Snapshot>> {
+    fn lookup(&self, id: u64, location: &RepositoryLocation) -> Option<Arc<OpenRepository>> {
         let mut entries = self.entries();
 
         let index = entries
             .iter()
-            .position(|entry| entry.id == id && entry.snapshot.git_dir == location.git_dir)?;
+            .position(|entry| entry.id == id && entry.opened.git_dir == location.git_dir)?;
         let entry = entries.remove(index)?;
-        let snapshot = Arc::clone(&entry.snapshot);
+        let opened = Arc::clone(&entry.opened);
 
         entries.push_back(entry);
         drop(entries);
 
-        Some(snapshot)
+        Some(opened)
     }
 
-    fn insert(&self, id: u64, snapshot: Arc<Snapshot>) {
+    fn insert(&self, id: u64, opened: Arc<OpenRepository>) {
         let mut entries = self.entries();
 
         entries.retain(|entry| entry.id != id);
-        entries.push_back(Entry { id, snapshot });
+        entries.push_back(Entry { id, opened });
 
         while entries.len() > CAPACITY {
             entries.pop_front();
@@ -150,8 +150,8 @@ impl Default for Registry {
     }
 }
 
-fn load(location: &RepositoryLocation) -> Result<Snapshot, GixError> {
-    Ok(Snapshot {
+fn load(location: &RepositoryLocation) -> Result<OpenRepository, GixError> {
+    Ok(OpenRepository {
         git_dir: location.git_dir.clone(),
         repo: open(location.root())?.into_sync(),
     })
@@ -207,7 +207,9 @@ mod tests {
         use super::*;
 
         #[rstest]
-        fn caches_the_snapshot(repo_dir: Result<TempDir, TestError>) -> Result<(), TestError> {
+        fn caches_the_opened_repository(
+            repo_dir: Result<TempDir, TestError>,
+        ) -> Result<(), TestError> {
             let dir = repo_dir?;
             let location = discover(dir.path())?;
             let registry = Registry::new();
@@ -318,7 +320,7 @@ mod tests {
         }
 
         #[rstest]
-        fn shares_one_snapshot_between_threads(
+        fn shares_one_opened_repository_between_threads(
             repo_dir: Result<TempDir, TestError>,
         ) -> Result<(), TestError> {
             const THREADS: usize = 8;
@@ -342,10 +344,10 @@ mod tests {
             });
 
             for result in shared {
-                let snapshot =
+                let opened =
                     result.map_err(|_panic| TestError::Failure("worker panicked".to_owned()))??;
 
-                assert!(Arc::ptr_eq(&snapshot, &expected));
+                assert!(Arc::ptr_eq(&opened, &expected));
             }
 
             Ok(())

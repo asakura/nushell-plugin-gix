@@ -9,5 +9,5 @@ pub use self::{
     error::GixError,
     log::{CommitInfo, log},
     open::{RepositoryLocation, discover},
-    registry::{Registry, Snapshot},
+    registry::{OpenRepository, Registry},
 };

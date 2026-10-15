@@ -59,13 +59,13 @@ impl PluginCommand for Log {
             .transpose()
             .map_err(|e| e.into_labeled(span))?;
 
-        let snapshot = plugin
+        let opened = plugin
             .registry()
             .acquire(repo.id, &repo.location())
             .map_err(|e| CommandError::from(e).into_labeled(input.span()))?;
 
         let commits =
-            git::log(snapshot, limit).map_err(|e| CommandError::from(e).into_labeled(span))?;
+            git::log(opened, limit).map_err(|e| CommandError::from(e).into_labeled(span))?;
         let values = commits.map(move |commit| commit_value(commit, span));
 
         Ok(ListStream::new(values, span, engine.signals().clone()).into())
