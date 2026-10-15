@@ -15,6 +15,7 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 gix = { version = "0.89", default-features = false, features = [
   "sha1",
   "blob-diff",
+  "parallel",
 ] }
 nu-plugin = "0.112.2"
 nu-protocol = "0.112.2"
