@@ -3,7 +3,8 @@
 use super::{GixError, open::open};
 
 use chrono::{DateTime, FixedOffset};
-use gix::{revision::walk::Sorting, traverse::commit::simple::CommitTimeOrder};
+use commit::simple;
+use gix::{revision::walk::Sorting, traverse::commit};
 
 use std::{
     path::Path,
@@ -96,7 +97,7 @@ fn commits(
 ) -> Result<impl Iterator<Item = Result<CommitInfo, GixError>>, GixError> {
     let walk = repo
         .rev_walk([tip])
-        .sorting(Sorting::ByCommitTime(CommitTimeOrder::NewestFirst))
+        .sorting(Sorting::ByCommitTime(simple::CommitTimeOrder::NewestFirst))
         .all()
         .map_err(GixError::Walk)?;
 
