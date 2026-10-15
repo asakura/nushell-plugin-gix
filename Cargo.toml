@@ -1,0 +1,161 @@
+[package]
+name = "nu_plugin_gix"
+version = "0.1.0"
+edition = "2024"
+authors = ["Mikalai Seva"]
+description = "A Nushell plugin exposing gix (gitoxide)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/asakura/nushell-plugin-gix"
+readme = "README.md"
+keywords = ["nushell", "plugin", "git", "gix"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+gix = { version = "0.89", default-features = false, features = [
+  "sha1",
+  "blob-diff",
+] }
+nu-plugin = "0.112.2"
+nu-protocol = "0.112.2"
+serde = { version = "1.0", default-features = false, features = ["derive"] }
+thiserror = "2.0"
+typetag = "0.2"
+
+[dev-dependencies]
+rstest = { version = "0.27", default-features = false }
+tempfile = "3.27"
+
+[lints.rust]
+# Safety — forbid means even #![allow(...)] can't override
+unsafe_code = "forbid"
+non_ascii_idents = "forbid"
+
+# Quality enforcement
+warnings = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+future_incompatible = { level = "deny", priority = -1 }
+nonstandard_style = { level = "deny", priority = -1 }
+unknown_lints = "allow"
+
+# Documentation enforcement
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+missing_copy_implementations = "deny"
+unfulfilled_lint_expectations = "deny"
+
+[lints.rustdoc]
+all = { level = "deny", priority = -1 }
+
+[lints.clippy]
+# All lint groups
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+restriction = { level = "deny", priority = -1 }
+blanket_clippy_restriction_lints = { level = "allow", priority = 1 }
+
+# Guardrails
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+panic_in_result_fn = "deny"
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+missing_const_for_fn = "deny"
+
+# Code hygiene
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+format_collect = "deny"
+
+# Async safety
+await_holding_lock = "deny"
+large_futures = "deny"
+
+# Process and memory safety
+exit = "deny"
+mem_forget = "deny"
+
+# Performance
+large_stack_arrays = "deny"
+large_types_passed_by_value = "deny"
+
+# Minimal relaxations
+multiple_crate_versions = "allow" # unavoidable with transitive deps
+
+# Cast lints — too many false positives even for strict projects
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
+
+# Nursery lints that have too many false positives
+cognitive_complexity = "allow" # use clippy.toml threshold instead
+
+# Allowed restriction lints
+implicit_return = "allow"
+arbitrary_source_item_ordering = "allow"
+single_char_lifetime_names = "allow"
+question_mark_used = "allow"
+module_name_repetitions = "allow"
+missing_inline_in_public_items = "allow"
+# Plugin traits (Plugin, PluginCommand, CustomValue) have many defaulted methods
+missing_trait_methods = "allow"
+exhaustive_structs = "allow"
+exhaustive_enums = "allow"
+pub_use = "allow"
+missing_docs_in_private_items = "allow"
+single_call_fn = "allow"
+wildcard_enum_match_arm = "allow"
+shadow_reuse = "allow"
+std_instead_of_alloc = "allow"
+std_instead_of_core = "allow"
+min_ident_chars = "allow"
+iter_over_hash_type = "allow"
+inline_modules = "allow"
+pub_with_shorthand = "allow"
+separated_literal_suffix = "allow"
+assertions_on_result_states = "allow"
+# Mutually exclusive with self_named_module_files (kept denied); this
+# project always uses `foo/mod.rs` for submodules, never sibling `foo.rs`.
+mod_module_files = "allow"
+
+# Denied restriction lints
+absolute_paths = "deny"
+empty_structs_with_brackets = "deny"
+map_err_ignore = "deny"
+arithmetic_side_effects = "deny"
+pub_without_shorthand = "deny"
+str_to_string = "deny"
+indexing_slicing = "deny"
+tests_outside_test_module = "deny"
+redundant_test_prefix = "deny"
+pattern_type_mismatch = "allow"
+inline_trait_bounds = "deny"
+field_scoped_visibility_modifiers = "deny"
+as_conversions = "deny"
+unused_trait_names = "deny"
+
+[profile.dev]
+split-debuginfo = "unpacked"
+debug = 1
+overflow-checks = true
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
+
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
