@@ -12,9 +12,9 @@
     )
 )]
 
+mod cdt;
 mod commands;
 mod git;
-mod repository;
 
 use nu_plugin::{MsgPackSerializer, Plugin, PluginCommand, serve_plugin};
 

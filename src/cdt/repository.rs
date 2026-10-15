@@ -11,12 +11,12 @@ use std::{any::Any, path::PathBuf};
 /// round-trips plugin custom values through MessagePack. Commands re-open the
 /// repository from this path on every invocation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GixRepository {
+pub struct Repository {
     /// Directory the repository was opened from.
     pub path: PathBuf,
 }
 
-impl GixRepository {
+impl Repository {
     /// Wraps `path` as a Nushell value spanning `span`.
     #[must_use = "returns the custom value; it is not emitted anywhere"]
     pub fn into_value(self, span: Span) -> Value {
@@ -25,7 +25,7 @@ impl GixRepository {
 }
 
 #[typetag::serde]
-impl CustomValue for GixRepository {
+impl CustomValue for Repository {
     fn clone_value(&self, span: Span) -> Value {
         self.clone().into_value(span)
     }
@@ -65,8 +65,8 @@ mod tests {
         Failure(String),
     }
 
-    fn repo() -> GixRepository {
-        GixRepository {
+    fn repo() -> Repository {
+        Repository {
             path: PathBuf::from("/tmp/some/repo"),
         }
     }
@@ -98,10 +98,7 @@ mod tests {
             let cloned = repo().clone_value(Span::test_data());
             let custom = cloned.as_custom_value()?;
 
-            assert_eq!(
-                custom.as_any().downcast_ref::<GixRepository>(),
-                Some(&repo())
-            );
+            assert_eq!(custom.as_any().downcast_ref::<Repository>(), Some(&repo()));
 
             Ok(())
         }

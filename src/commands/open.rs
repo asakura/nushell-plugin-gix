@@ -1,6 +1,6 @@
 //! `gix open`: open the git repository in the current directory.
 
-use crate::{git, repository::GixRepository};
+use crate::{cdt::Repository, git};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
 use nu_protocol::{Category, LabeledError, Signature, Type, Value};
@@ -46,9 +46,9 @@ impl SimplePluginCommand for Open {
 }
 
 /// Validates that `path` is a repository and returns a handle to it.
-fn run_open(path: PathBuf) -> Result<GixRepository, CommandError> {
+fn run_open(path: PathBuf) -> Result<Repository, CommandError> {
     git::verify(&path)?;
-    Ok(GixRepository { path })
+    Ok(Repository { path })
 }
 
 #[cfg(test)]

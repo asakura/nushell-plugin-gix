@@ -1,8 +1,8 @@
 //! `gix log`: stream the commits of an opened repository as a Nushell `ListStream`.
 
 use crate::{
+    cdt::Repository,
     git::{self, CommitInfo, GixError},
-    repository::GixRepository,
 };
 
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
@@ -68,11 +68,11 @@ impl PluginCommand for Log {
 }
 
 /// Extracts the repository handle from pipeline input.
-fn repository_from(input: &Value) -> Result<&GixRepository, LabeledError> {
+fn repository_from(input: &Value) -> Result<&Repository, LabeledError> {
     input
         .as_custom_value()
         .ok()
-        .and_then(|custom| custom.as_any().downcast_ref::<GixRepository>())
+        .and_then(|custom| custom.as_any().downcast_ref::<Repository>())
         .ok_or_else(|| {
             LabeledError::new("expected a `git repository` value")
                 .with_label(format!("got {}", input.get_type()), input.span())
@@ -157,7 +157,7 @@ mod tests {
 
         #[rstest]
         fn accepts_gix_repository() -> Result<(), TestError> {
-            let handle = GixRepository {
+            let handle = Repository {
                 path: PathBuf::from("/tmp/r"),
             };
 
