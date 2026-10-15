@@ -123,6 +123,21 @@ mod tests {
         }
 
         #[rstest]
+        fn suggests_reopening_a_deleted_repository() {
+            let err = CommandError::from(GixError::RepositoryGone {
+                git_dir: PathBuf::from("/gone/.git"),
+            });
+
+            let labeled = err.into_labeled(Span::test_data());
+
+            assert_eq!(
+                labeled.msg,
+                "git repository at '/gone/.git' was moved or deleted"
+            );
+            assert_eq!(labeled.labels.len(), 1);
+        }
+
+        #[rstest]
         fn has_no_label_for_walk_errors() {
             let err = CommandError::Git(GixError::Timestamp {
                 id: "abc".to_owned(),
