@@ -32,8 +32,8 @@ const     = "named const for every magic literal (string sentinel, numeric limit
 generics  = "free fns + inherent methods: fn f<S>(x: S) where S: Bound — no impl Trait in params, no inline bounds; trait methods: impl Trait in params OK"
 
 [errors]
-lib         = "thiserror; one Error type per module boundary, re-exported at the root; #[from] foreign errors"
-nushell     = "convert to nu_protocol::LabeledError only at the PluginCommand::run boundary (with a span pointing at the offending argument/input); never deeper"
+lib         = "thiserror; one Error type per module boundary (git::GixError, commands::CommandError), re-exported at the module root; #[from] foreign errors"
+nushell     = "convert to nu_protocol::LabeledError only at the PluginCommand::run boundary (with a span pointing at the offending argument/input); never deeper, and never inside src/git (see [boundary])"
 msgs        = "#[error] human-readable, not Debug"
 context     = "no anyhow/miette/eyre; context lives in typed variant fields (#[source] inner + path/name fields); never .context() chains"
 
@@ -65,6 +65,16 @@ shape    = "Nushell plugin: binary named nu_plugin_* speaking the plugin protoco
 stdio    = "stdout/stderr carry the protocol — never print (print_stdout/print_stderr denied); report problems as LabeledError"
 versions = "nu-plugin/nu-protocol pinned to the Nushell release the plugin targets (currently 0.112.2); gix 0.89 — bump deliberately, together"
 commands = "one PluginCommand per Nushell command; signature(), description and examples are user-facing — keep them accurate"
+
+[boundary]
+# two sides, one direction of dependency: Nushell side -> git side, never the reverse
+git     = "src/git/: all gix access; MUST NOT import nu_protocol/nu_plugin (grep src/git for nu_ must stay empty); no Span, Value, LabeledError, CustomValue"
+nushell = "src/commands/ + src/repository.rs: PluginCommands, custom values, Value/record mapping, LabeledError conversion; MUST NOT touch gix types (tests may call gix to build fixtures)"
+api     = "git module exposes domain types (CommitInfo, GixError) and plain-Rust fns/iterators; no gix::Repository or other gix types in its pub API; mod.rs only declares modules and re-exports"
+errors  = "git::GixError is Nushell-free; commands::CommandError wraps it (#[from]) plus argument errors (e.g. NegativeLimit) and owns into_labeled(span), called only at run/stream-mapping boundaries"
+values  = "custom values hold only serializable plain handles (e.g. PathBuf); commands re-open via git on each call — never store gix::Repository in a CustomValue"
+streams = "git yields Iterator<Item = Result<DomainType, GixError>>; commands map items to Value and wrap in ListStream with engine.signals()"
+doctest = "bin crate => no doctests; if the git side needs tested examples, extract src/git into a lib target (compile-time enforcement of this boundary)"
 
 [antirot]
 rules = "del dead-code (no commented-out blocks; no #[expect(dead_code)] on prod items); no-TODO (CI greps for TODO/FIXME/HACK/XXX in *.rs); ≥2-callers; docs-same-commit; tests-guard-intent; no-defensive-impossible"
