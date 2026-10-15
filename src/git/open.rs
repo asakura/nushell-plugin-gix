@@ -33,9 +33,9 @@ pub(super) fn open(path: &Path) -> Result<gix::Repository, GixError> {
 ///
 /// # Errors
 ///
-/// Returns [`GixError::Open`] when neither `path` nor any parent is a git repository.
+/// Returns [`GixError::NotFound`] when neither `path` nor any parent is a git repository.
 pub fn discover(path: &Path) -> Result<RepositoryLocation, GixError> {
-    let repo = gix::discover(path).map_err(|source| GixError::Open {
+    let repo = gix::discover(path).map_err(|source| GixError::NotFound {
         path: path.to_owned(),
         source,
     })?;
@@ -164,7 +164,7 @@ mod tests {
                 .err()
                 .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
-            assert!(matches!(err, GixError::Open { .. }), "got {err:?}");
+            assert!(matches!(err, GixError::NotFound { .. }), "got {err:?}");
 
             Ok(())
         }

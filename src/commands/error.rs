@@ -35,7 +35,14 @@ impl CommandError {
     #[must_use = "returns the converted error; the original is consumed"]
     pub fn into_labeled(self, span: Span) -> LabeledError {
         let mut chain = Vec::new();
-        let mut source = self.source();
+        let mut source = match &self {
+            Self::NotARepository {
+                path: _path,
+                span: _span,
+                source: found,
+            } => found.source(),
+            Self::Git(_) | Self::NegativeLimit(_) => self.source(),
+        };
 
         while let Some(err) = source {
             chain.push(err.to_string());
@@ -75,10 +82,14 @@ impl CommandError {
                 source: _source,
             } => Some("no git repository found at this path"),
             Self::NegativeLimit(_) => Some("expected a non-negative integer"),
-            Self::Git(GixError::Open {
+            Self::Git(GixError::NotFound {
                 path: _path,
                 source: _source,
             }) => Some("run this from inside a git repository"),
+            Self::Git(GixError::Open {
+                path: _path,
+                source: _source,
+            }) => Some("the repository was found but could not be opened; it may be corrupt"),
             Self::Git(GixError::RepositoryGone { git_dir: _git_dir }) => Some(
                 "the repository is no longer at this location; run `gix open` again if it moved",
             ),
@@ -92,9 +103,26 @@ impl CommandError {
 mod tests {
     use super::*;
 
+    use crate::git::discover;
+
     use rstest::rstest;
 
-    use std::io;
+    use std::{io, path::Path};
+
+    const MISSING_PATH: &str = "/nonexistent/gix-test";
+
+    #[derive(Debug, thiserror::Error)]
+    enum TestError {
+        #[error("Test failure: {0}")]
+        Failure(String),
+    }
+
+    /// The error `git::discover` gives for a path outside any repository.
+    fn missing_repository() -> Result<GixError, TestError> {
+        discover(Path::new(MISSING_PATH))
+            .err()
+            .ok_or_else(|| TestError::Failure("expected an error".to_owned()))
+    }
 
     mod into_labeled {
         use super::*;
@@ -135,6 +163,63 @@ mod tests {
                 "git repository at '/gone/.git' was moved or deleted"
             );
             assert_eq!(labeled.labels.len(), 1);
+        }
+
+        #[rstest]
+        fn labels_missing_repository_as_a_location_problem() -> Result<(), TestError> {
+            let err = CommandError::from(missing_repository()?);
+
+            let labeled = err.into_labeled(Span::test_data());
+
+            assert_eq!(
+                labeled.labels.first().map(|l| l.text.as_str()),
+                Some("run this from inside a git repository")
+            );
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn labels_unopenable_repository_as_possibly_corrupt() -> Result<(), TestError> {
+            let source = gix::open(MISSING_PATH)
+                .err()
+                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+            let err = CommandError::from(GixError::Open {
+                path: PathBuf::from(MISSING_PATH),
+                source,
+            });
+
+            let labeled = err.into_labeled(Span::test_data());
+
+            assert_eq!(
+                labeled.labels.first().map(|l| l.text.as_str()),
+                Some("the repository was found but could not be opened; it may be corrupt")
+            );
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn does_not_repeat_the_headline_in_help() -> Result<(), TestError> {
+            let err = CommandError::NotARepository {
+                path: PathBuf::from(MISSING_PATH),
+                span: Span::test_data(),
+                source: missing_repository()?,
+            };
+
+            let labeled = err.into_labeled(Span::test_data());
+
+            assert!(
+                labeled
+                    .help
+                    .as_deref()
+                    .is_none_or(|help| !help.contains("no git repository found")),
+                "got {:?}",
+                labeled.help
+            );
+
+            Ok(())
         }
 
         #[rstest]
