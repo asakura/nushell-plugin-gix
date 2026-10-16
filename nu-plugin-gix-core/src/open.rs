@@ -22,7 +22,7 @@ impl RepositoryLocation {
 }
 
 /// Opens the repository at exactly `path` (no parent-directory discovery).
-pub(super) fn open(path: &Path) -> Result<gix::Repository, GixError> {
+pub fn open(path: &Path) -> Result<gix::Repository, GixError> {
     gix::open(path).map_err(|source| GixError::Open {
         path: path.to_owned(),
         source,

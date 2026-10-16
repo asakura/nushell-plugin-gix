@@ -1,0 +1,23 @@
+[package]
+name = "nu-plugin-gix-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Pure git layer for nushell-plugin-gix; does not depend on nu-plugin or nu-protocol"
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["git", "gix"]
+categories = ["development-tools"]
+
+[dependencies]
+chrono = { workspace = true }
+gix = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

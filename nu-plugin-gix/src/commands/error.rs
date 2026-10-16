@@ -1,6 +1,6 @@
 //! Command-level error that is converted to a Nushell `LabeledError` at the `run` boundary.
 
-use crate::git::GixError;
+use nu_plugin_gix_core::GixError;
 
 use nu_protocol::{LabeledError, Span};
 
@@ -126,7 +126,7 @@ impl CommandError {
 mod tests {
     use super::*;
 
-    use crate::git::discover;
+    use nu_plugin_gix_core::discover;
 
     use rstest::rstest;
 

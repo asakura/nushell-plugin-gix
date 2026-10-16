@@ -1,6 +1,7 @@
 //! The Nushell-side custom value returned by `gix open`; a handle of on-disk locations with no `gix` types.
 
-use crate::{cdt::Handle, git::RepositoryLocation};
+use crate::cdt::Handle;
+use nu_plugin_gix_core::RepositoryLocation;
 
 use nu_protocol::{CustomValue, ShellError, Span, Value, record};
 use serde::{Deserialize, Serialize};
@@ -15,8 +16,8 @@ use std::{any::Any, path::PathBuf};
 /// Two handles are equal when they name the same git directory.
 ///
 /// Opened `gix::Repository` state is deliberately not held here: it is not
-/// serializable and `src/cdt` must not touch `gix` types. It is cached plugin-side
-/// in the git-side [`Registry`](crate::git::Registry), keyed by `id`; after a plugin
+/// serializable and `nu-plugin-gix` must not touch `gix` types directly. It is cached plugin-side
+/// in the git-side [`Registry`](nu_plugin_gix_core::Registry), keyed by `id`; after a plugin
 /// restart the cache is empty and is rebuilt from the other fields.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Repository {

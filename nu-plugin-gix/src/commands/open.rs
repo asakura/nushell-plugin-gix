@@ -1,9 +1,7 @@
 //! `gix open`: open a git repository, by default the one containing the current directory.
 
-use crate::{
-    cdt::Repository,
-    git::{self, Registry},
-};
+use crate::cdt::Repository;
+use nu_plugin_gix_core::{self as git, Registry};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
 use nu_protocol::{Category, LabeledError, Signature, Spanned, SyntaxShape, Type, Value};
