@@ -27,6 +27,10 @@ impl SimplePluginCommand for Open {
         "Open a git repository: the one containing the current directory, or the one at --repo."
     }
 
+    fn extra_description(&self) -> &'static str {
+        "Error codes: gix::not-a-repository, gix::open-failed"
+    }
+
     fn signature(&self) -> Signature {
         Signature::build(self.name())
             .named(

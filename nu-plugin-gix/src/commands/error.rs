@@ -22,6 +22,22 @@ const WRONG_INPUT_CODE: &str = "gix::wrong-input";
 const NEGATIVE_LIMIT_CODE: &str = "gix::negative-limit";
 const INVALID_SIDE_CODE: &str = "gix::invalid-side";
 
+/// Every stable code an error of this plugin can carry.
+#[cfg(test)]
+const ALL_CODES: &[&str] = &[
+    NOT_A_REPOSITORY_CODE,
+    OPEN_FAILED_CODE,
+    BAD_REVISION_CODE,
+    INVALID_REVISION_CODE,
+    WALK_FAILED_CODE,
+    COMMIT_UNREADABLE_CODE,
+    BAD_TIMESTAMP_CODE,
+    IO_CODE,
+    WRONG_INPUT_CODE,
+    NEGATIVE_LIMIT_CODE,
+    INVALID_SIDE_CODE,
+];
+
 const INVALID_SIDE_LABEL: &str = "invalid side";
 
 /// What a command needed and what its pipeline input actually was.
@@ -671,6 +687,40 @@ mod tests {
             let labeled = err.into_labeled(Span::test_data());
 
             assert_eq!(labeled.code, None);
+        }
+    }
+
+    mod documentation {
+        use super::*;
+
+        use crate::commands::{Log, Open};
+        use nu_plugin::PluginCommand as _;
+
+        const CODES_LINE_PREFIX: &str = "Error codes: ";
+
+        /// The codes a command's `extra_description` lists after `Error codes: `.
+        fn listed_codes(extra_description: &str) -> Result<Vec<&str>, TestError> {
+            extra_description
+                .lines()
+                .find_map(|line| line.strip_prefix(CODES_LINE_PREFIX))
+                .ok_or_else(|| TestError::Failure("missing an `Error codes:` line".to_owned()))
+                .map(|codes| codes.split(", ").collect())
+        }
+
+        #[rstest]
+        fn every_documented_code_is_known() -> Result<(), TestError> {
+            let documented = listed_codes(Open.extra_description())?
+                .into_iter()
+                .chain(listed_codes(Log.extra_description())?);
+
+            for code in documented {
+                assert!(
+                    ALL_CODES.contains(&code),
+                    "`{code}` is documented but not in ALL_CODES"
+                );
+            }
+
+            Ok(())
         }
     }
 }
