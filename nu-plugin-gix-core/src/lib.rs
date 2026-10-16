@@ -16,10 +16,12 @@ mod error;
 mod log;
 mod open;
 mod registry;
+mod side;
 
 pub use self::{
     error::GixError,
     log::{CommitInfo, log},
     open::{RepositoryLocation, discover},
     registry::{OpenRepository, Registry},
+    side::{ResolvedRevision, Side},
 };

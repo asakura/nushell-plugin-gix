@@ -36,6 +36,16 @@ pub enum GixError {
     #[error("could not resolve HEAD")]
     Head(#[source] gix::Error),
 
+    /// A revision expression could not be resolved in the repository.
+    #[error("could not resolve revision '{expression}'")]
+    Revision {
+        /// The revision expression as written.
+        expression: String,
+        /// The underlying `gix` error.
+        #[source]
+        source: gix::Error,
+    },
+
     /// Setting up or running the revision walk failed.
     #[error("revision walk failed")]
     Walk(#[source] gix::Error),

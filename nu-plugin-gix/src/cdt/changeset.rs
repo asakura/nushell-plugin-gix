@@ -2,34 +2,11 @@
 
 use crate::cdt::Handle;
 
+use nu_plugin_gix_core::Side;
 use nu_protocol::{CustomValue, ShellError, Span, Value, record};
 use serde::{Deserialize, Serialize};
 
 use std::{any::Any, path::PathBuf};
-
-/// One side of a comparison: where content is read from.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Side {
-    /// The commit `HEAD` points at.
-    Head,
-    /// The repository's index.
-    Index,
-    /// The files in the working tree.
-    Worktree,
-    /// A revision, as the caller wrote it.
-    Revision(String),
-}
-
-impl Side {
-    fn label(&self) -> &str {
-        match self {
-            Self::Head => "head",
-            Self::Index => "index",
-            Self::Worktree => "worktree",
-            Self::Revision(rev) => rev,
-        }
-    }
-}
 
 /// How a path differs between the two sides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,8 +101,8 @@ impl CustomValue for Changeset {
                     record! {
                         "path" => Value::string(change.path.as_str(), span),
                         "status" => Value::string(change.kind.label(), span),
-                        "from" => Value::string(self.from.label(), span),
-                        "to" => Value::string(self.to.label(), span),
+                        "from" => Value::string(self.from.to_string(), span),
+                        "to" => Value::string(self.to.to_string(), span),
                     },
                     span,
                 )
@@ -233,7 +210,6 @@ mod tests {
 
         #[rstest]
         #[case::other_side(Changeset { to: Side::Index, ..changeset() })]
-        #[case::other_revision(Changeset { from: Side::Revision("main".to_owned()), ..changeset() })]
         #[case::no_changes(Changeset { changes: Vec::new(), ..changeset() })]
         fn differs_when_sides_or_content_differ(#[case] other: Changeset) {
             assert_ne!(changeset(), other);

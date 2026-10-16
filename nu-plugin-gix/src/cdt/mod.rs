@@ -5,12 +5,8 @@ mod handle;
 mod index;
 mod repository;
 
-#[expect(
-    unused_imports,
-    reason = "Index and Changeset have no producing command until the `gix index` and `gix changes` issues land"
-)]
 pub use self::{
-    changeset::{Change, ChangeKind, Changeset, Side},
+    changeset::{Change, ChangeKind, Changeset},
     index::Index,
 };
 pub use self::{
