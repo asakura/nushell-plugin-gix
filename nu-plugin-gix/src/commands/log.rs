@@ -28,6 +28,12 @@ impl PluginCommand for Log {
         "List the commits of a repository opened with `gix open`, newest first."
     }
 
+    fn extra_description(&self) -> &'static str {
+        "Error codes: gix::wrong-input, gix::negative-limit, gix::open-failed, \
+        gix::bad-revision, gix::walk-failed, gix::commit-unreadable, gix::bad-timestamp, \
+        gix::io"
+    }
+
     fn signature(&self) -> Signature {
         Signature::build(self.name())
             .named(

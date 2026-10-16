@@ -1,10 +1,42 @@
 //! Command-level error that is converted to a Nushell `LabeledError` at the `run` boundary.
+//!
+//! Error model: every surfaced error carries a stable code (`CommandError::code`), listed per
+//! command in its `extra_description`. Commands that ask a question (`changes`, `search`) return
+//! an empty table on "nothing found", never an error.
 
 use nu_plugin_gix_core::GixError;
 
 use nu_protocol::{LabeledError, Span};
 
 use std::{error::Error as _, path::PathBuf};
+
+const NOT_A_REPOSITORY_CODE: &str = "gix::not-a-repository";
+const OPEN_FAILED_CODE: &str = "gix::open-failed";
+const BAD_REVISION_CODE: &str = "gix::bad-revision";
+const INVALID_REVISION_CODE: &str = "gix::invalid-revision";
+const WALK_FAILED_CODE: &str = "gix::walk-failed";
+const COMMIT_UNREADABLE_CODE: &str = "gix::commit-unreadable";
+const BAD_TIMESTAMP_CODE: &str = "gix::bad-timestamp";
+const IO_CODE: &str = "gix::io";
+const WRONG_INPUT_CODE: &str = "gix::wrong-input";
+const NEGATIVE_LIMIT_CODE: &str = "gix::negative-limit";
+const INVALID_SIDE_CODE: &str = "gix::invalid-side";
+
+/// Every stable code an error of this plugin can carry.
+#[cfg(test)]
+const ALL_CODES: &[&str] = &[
+    NOT_A_REPOSITORY_CODE,
+    OPEN_FAILED_CODE,
+    BAD_REVISION_CODE,
+    INVALID_REVISION_CODE,
+    WALK_FAILED_CODE,
+    COMMIT_UNREADABLE_CODE,
+    BAD_TIMESTAMP_CODE,
+    IO_CODE,
+    WRONG_INPUT_CODE,
+    NEGATIVE_LIMIT_CODE,
+    INVALID_SIDE_CODE,
+];
 
 const INVALID_SIDE_LABEL: &str = "invalid side";
 
@@ -148,10 +180,38 @@ impl CommandError {
             labeled
         };
 
+        let labeled = match self.code() {
+            Some(code) => labeled.with_code(code),
+            None => labeled,
+        };
+
         if chain.is_empty() {
             labeled
         } else {
             labeled.with_help(chain.join(": "))
+        }
+    }
+
+    /// The stable code surfaced on the `LabeledError`, if one is defined.
+    ///
+    /// The match must cover every variant; a variant that intentionally has no code returns
+    /// `None` with a comment saying which issue defines it.
+    #[expect(
+        clippy::rest_pattern_accessible_field,
+        reason = "codes classify error variants independently of their diagnostic data"
+    )]
+    const fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::Git(git) => git_code(git),
+            Self::NotARepository { .. } => Some(NOT_A_REPOSITORY_CODE),
+            Self::WrongInput(_) => Some(WRONG_INPUT_CODE),
+            Self::NegativeLimit(_) => Some(NEGATIVE_LIMIT_CODE),
+            Self::InvalidSideType { .. }
+            | Self::InvalidSideRecord { .. }
+            | Self::InvalidSideField { .. } => Some(INVALID_SIDE_CODE),
+            Self::EmptyRevision { .. } | Self::InvalidObjectId { .. } => {
+                Some(INVALID_REVISION_CODE)
+            }
         }
     }
 
@@ -232,6 +292,26 @@ impl CommandError {
     }
 }
 
+/// The stable code for a git-layer error.
+///
+/// `RepositoryGone` stays uncoded: the handle-related codes are defined by issue #21.
+#[expect(
+    clippy::rest_pattern_accessible_field,
+    reason = "codes classify error variants independently of their diagnostic data"
+)]
+const fn git_code(error: &GixError) -> Option<&'static str> {
+    match error {
+        GixError::NotFound { .. } => Some(NOT_A_REPOSITORY_CODE),
+        GixError::Open { .. } => Some(OPEN_FAILED_CODE),
+        GixError::RepositoryGone { .. } => None,
+        GixError::Head(_) | GixError::Revision { .. } => Some(BAD_REVISION_CODE),
+        GixError::Walk(_) => Some(WALK_FAILED_CODE),
+        GixError::Commit { .. } => Some(COMMIT_UNREADABLE_CODE),
+        GixError::Timestamp { .. } => Some(BAD_TIMESTAMP_CODE),
+        GixError::Spawn(_) => Some(IO_CODE),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +333,13 @@ mod tests {
     /// The error `git::discover` gives for a path outside any repository.
     fn missing_repository() -> Result<GixError, TestError> {
         discover(Path::new(MISSING_PATH))
+            .err()
+            .ok_or_else(|| TestError::Failure("expected an error".to_owned()))
+    }
+
+    /// A real `gix::Error`, as produced for a path that cannot be opened.
+    fn gix_error() -> Result<gix::Error, TestError> {
+        gix::open(MISSING_PATH)
             .err()
             .ok_or_else(|| TestError::Failure("expected an error".to_owned()))
     }
@@ -468,6 +555,172 @@ mod tests {
             let labeled = err.into_labeled(Span::test_data());
 
             assert_eq!(labeled.msg, "commit abc has an out-of-range timestamp");
+        }
+    }
+
+    mod codes {
+        use super::*;
+
+        #[rstest]
+        #[case::not_a_repository(
+            CommandError::NotARepository {
+                path: PathBuf::from("/nope"),
+                span: Span::test_data(),
+                source: GixError::Spawn(io::Error::other("not found")),
+            },
+            NOT_A_REPOSITORY_CODE
+        )]
+        #[case::wrong_input(
+            CommandError::WrongInput(WrongInput {
+                expected: "git repository",
+                hint: "pipe the output of `gix open` into this command",
+                got: "int".to_owned(),
+                span: Span::test_data(),
+            }),
+            WRONG_INPUT_CODE
+        )]
+        #[case::negative_limit(CommandError::NegativeLimit(-3), NEGATIVE_LIMIT_CODE)]
+        #[case::invalid_side_type(
+            CommandError::InvalidSideType {
+                got: "int".to_owned(),
+                span: Span::test_data(),
+            },
+            INVALID_SIDE_CODE
+        )]
+        #[case::invalid_side_record(
+            CommandError::InvalidSideRecord {
+                span: Span::test_data(),
+            },
+            INVALID_SIDE_CODE
+        )]
+        #[case::invalid_side_field(
+            CommandError::InvalidSideField {
+                field: "rev",
+                got: "int".to_owned(),
+                span: Span::test_data(),
+            },
+            INVALID_SIDE_CODE
+        )]
+        #[case::empty_revision(
+            CommandError::EmptyRevision {
+                span: Span::test_data(),
+            },
+            INVALID_REVISION_CODE
+        )]
+        #[case::invalid_object_id(
+            CommandError::InvalidObjectId {
+                expression: "abc".to_owned(),
+                span: Span::test_data(),
+            },
+            INVALID_REVISION_CODE
+        )]
+        fn argument_errors_carry_stable_codes(#[case] error: CommandError, #[case] code: &str) {
+            let labeled = error.into_labeled(Span::test_data());
+
+            assert_eq!(labeled.code.as_deref(), Some(code));
+        }
+
+        #[rstest]
+        fn git_errors_carry_stable_codes() -> Result<(), TestError> {
+            let cases = [
+                (
+                    CommandError::from(missing_repository()?),
+                    NOT_A_REPOSITORY_CODE,
+                ),
+                (
+                    CommandError::from(GixError::Open {
+                        path: PathBuf::from(MISSING_PATH),
+                        source: gix_error()?,
+                    }),
+                    OPEN_FAILED_CODE,
+                ),
+                (
+                    CommandError::from(GixError::Revision {
+                        expression: "nope".to_owned(),
+                        source: gix_error()?,
+                    }),
+                    BAD_REVISION_CODE,
+                ),
+                (
+                    CommandError::from(GixError::Head(gix_error()?)),
+                    BAD_REVISION_CODE,
+                ),
+                (
+                    CommandError::from(GixError::Walk(gix_error()?)),
+                    WALK_FAILED_CODE,
+                ),
+                (
+                    CommandError::from(GixError::Commit {
+                        id: "abc".to_owned(),
+                        source: gix_error()?,
+                    }),
+                    COMMIT_UNREADABLE_CODE,
+                ),
+                (
+                    CommandError::from(GixError::Timestamp {
+                        id: "abc".to_owned(),
+                    }),
+                    BAD_TIMESTAMP_CODE,
+                ),
+                (
+                    CommandError::from(GixError::Spawn(io::Error::other("no thread"))),
+                    IO_CODE,
+                ),
+            ];
+
+            for (error, code) in cases {
+                let labeled = error.into_labeled(Span::test_data());
+
+                assert_eq!(labeled.code.as_deref(), Some(code));
+            }
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn repository_gone_has_no_code() {
+            // The handle-related codes are defined by issue #21, not here.
+            let err = CommandError::from(GixError::RepositoryGone {
+                git_dir: PathBuf::from("/gone/.git"),
+            });
+
+            let labeled = err.into_labeled(Span::test_data());
+
+            assert_eq!(labeled.code, None);
+        }
+    }
+
+    mod documentation {
+        use super::*;
+
+        use crate::commands::{Log, Open};
+        use nu_plugin::PluginCommand as _;
+
+        const CODES_LINE_PREFIX: &str = "Error codes: ";
+
+        /// The codes a command's `extra_description` lists after `Error codes: `.
+        fn listed_codes(extra_description: &str) -> Result<Vec<&str>, TestError> {
+            extra_description
+                .lines()
+                .find_map(|line| line.strip_prefix(CODES_LINE_PREFIX))
+                .ok_or_else(|| TestError::Failure("missing an `Error codes:` line".to_owned()))
+                .map(|codes| codes.split(", ").collect())
+        }
+
+        #[rstest]
+        fn every_documented_code_is_known() -> Result<(), TestError> {
+            let documented = listed_codes(Open.extra_description())?
+                .into_iter()
+                .chain(listed_codes(Log.extra_description())?);
+
+            for code in documented {
+                assert!(
+                    ALL_CODES.contains(&code),
+                    "`{code}` is documented but not in ALL_CODES"
+                );
+            }
+
+            Ok(())
         }
     }
 }
