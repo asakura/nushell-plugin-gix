@@ -6,6 +6,8 @@ use nu_protocol::{LabeledError, Span};
 
 use std::{error::Error as _, path::PathBuf};
 
+const INVALID_SIDE_LABEL: &str = "invalid side";
+
 /// What a command needed and what its pipeline input actually was.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WrongInput {
@@ -45,20 +47,75 @@ pub enum CommandError {
     /// A negative value was given for the commit limit.
     #[error("limit must not be negative, got {0}")]
     NegativeLimit(i64),
+
+    /// A side must be a string or a record.
+    #[error("a side must be a string or a record, got {got}")]
+    InvalidSideType {
+        /// Nushell type name that was received.
+        got: String,
+        /// Span of the invalid side.
+        span: Span,
+    },
+
+    /// A revision expression cannot be blank.
+    #[error("revision must not be empty")]
+    EmptyRevision {
+        /// Span of the blank revision.
+        span: Span,
+    },
+
+    /// A revision looks like an object id but is not a valid hexadecimal SHA-1 or SHA-256 digest.
+    #[error("'{expression}' has the length of an object id but is not a valid one")]
+    InvalidObjectId {
+        /// The revision as written.
+        expression: String,
+        /// Span of the invalid revision.
+        span: Span,
+    },
+
+    /// A side record must contain only a `rev` field.
+    #[error("a side record must contain only a `rev` field")]
+    InvalidSideRecord {
+        /// Span of the invalid record.
+        span: Span,
+    },
+
+    /// A side record field had an invalid value.
+    #[error("side field `{field}` must be a string, got {got}")]
+    InvalidSideField {
+        /// Field whose value was invalid.
+        field: &'static str,
+        /// Nushell type name that was received.
+        got: String,
+        /// Span of the invalid field value.
+        span: Span,
+    },
 }
 
 impl CommandError {
     /// Converts into a `LabeledError` pointing at `span`, appending the source chain as help text.
     #[must_use = "returns the converted error; the original is consumed"]
+    #[expect(
+        clippy::rest_pattern_accessible_field,
+        reason = "the error source chain deliberately ignores the caller-facing fields"
+    )]
     pub fn into_labeled(self, span: Span) -> LabeledError {
         let mut chain = Vec::new();
+
         let mut source = match &self {
             Self::NotARepository {
                 path: _path,
                 span: _span,
                 source: found,
             } => found.source(),
-            Self::Git(_) | Self::NegativeLimit(_) | Self::WrongInput(_) => self.source(),
+            Self::Git(_)
+            | Self::NegativeLimit(_)
+            | Self::WrongInput(_)
+            | Self::InvalidSideType { .. }
+            | Self::EmptyRevision { .. }
+            | Self::InvalidObjectId { .. }
+            | Self::InvalidSideRecord { .. }
+            | Self::InvalidSideField { .. } => self.source(),
         };
 
         while let Some(err) = source {
@@ -72,10 +129,23 @@ impl CommandError {
             Self::WrongInput(input) => LabeledError::new(self.to_string())
                 .with_label(format!("got {}", input.got), span)
                 .with_help(input.hint),
+            Self::InvalidSideType { .. }
+            | Self::EmptyRevision { .. }
+            | Self::InvalidObjectId { .. }
+            | Self::InvalidSideRecord { .. }
+            | Self::InvalidSideField { .. } => {
+                LabeledError::new(self.to_string()).with_label(INVALID_SIDE_LABEL, span)
+            }
             _ => Self::label(&self).map_or_else(
                 || LabeledError::new(self.to_string()),
                 |label| LabeledError::new(self.to_string()).with_label(label, span),
             ),
+        };
+
+        let labeled = if let Some(help) = Self::side_help(&self) {
+            labeled.with_help(help)
+        } else {
+            labeled
         };
 
         if chain.is_empty() {
@@ -85,6 +155,10 @@ impl CommandError {
         }
     }
 
+    #[expect(
+        clippy::rest_pattern_accessible_field,
+        reason = "only the stored source span determines the diagnostic location"
+    )]
     const fn own_span(&self) -> Option<Span> {
         match self {
             Self::NotARepository {
@@ -93,10 +167,19 @@ impl CommandError {
                 source: _source,
             } => Some(*flag_span),
             Self::WrongInput(input) => Some(input.span),
+            Self::InvalidSideType { span, .. }
+            | Self::EmptyRevision { span }
+            | Self::InvalidObjectId { span, .. }
+            | Self::InvalidSideRecord { span }
+            | Self::InvalidSideField { span, .. } => Some(*span),
             Self::Git(_) | Self::NegativeLimit(_) => None,
         }
     }
 
+    #[expect(
+        clippy::rest_pattern_accessible_field,
+        reason = "labels classify error variants independently of their diagnostic data"
+    )]
     const fn label(&self) -> Option<&'static str> {
         match self {
             Self::NotARepository {
@@ -105,6 +188,13 @@ impl CommandError {
                 source: _source,
             } => Some("no git repository found at this path"),
             Self::NegativeLimit(_) => Some("expected a non-negative integer"),
+            Self::InvalidSideType { .. } => Some("use `head`, `index`, `worktree`, or a revision"),
+            Self::EmptyRevision { .. } => Some("provide a non-empty revision expression"),
+            Self::InvalidObjectId { .. } => {
+                Some("object ids are hexadecimal: 40 characters for SHA-1, 64 for SHA-256")
+            }
+            Self::InvalidSideRecord { .. } => Some("use a record with exactly one `rev` field"),
+            Self::InvalidSideField { .. } => Some("the `rev` field must contain a revision string"),
             Self::Git(GixError::NotFound {
                 path: _path,
                 source: _source,
@@ -118,6 +208,26 @@ impl CommandError {
             ),
             Self::Git(GixError::Head(_)) => Some("the repository may have no commits yet"),
             Self::WrongInput(_) | Self::Git(_) => None,
+        }
+    }
+
+    #[expect(
+        clippy::rest_pattern_accessible_field,
+        reason = "side help is selected solely by the kind of input error"
+    )]
+    const fn side_help(&self) -> Option<&'static str> {
+        match self {
+            Self::InvalidSideType { .. } => Some("use `head`, `index`, `worktree`, or a revision"),
+            Self::EmptyRevision { .. } => Some("provide a non-empty revision expression"),
+            Self::InvalidObjectId { .. } => {
+                Some("object ids are hexadecimal: 40 characters for SHA-1, 64 for SHA-256")
+            }
+            Self::InvalidSideRecord { .. } => Some("use a record with exactly one `rev` field"),
+            Self::InvalidSideField { .. } => Some("the `rev` field must contain a revision string"),
+            Self::Git(_)
+            | Self::NotARepository { .. }
+            | Self::WrongInput(_)
+            | Self::NegativeLimit(_) => None,
         }
     }
 }
@@ -149,6 +259,79 @@ mod tests {
 
     mod into_labeled {
         use super::*;
+
+        #[rstest]
+        fn points_an_invalid_side_type_at_the_value() {
+            let input_span = Span::new(3, 9);
+            let labeled = CommandError::InvalidSideType {
+                got: "int".to_owned(),
+                span: input_span,
+            }
+            .into_labeled(Span::test_data());
+
+            assert_eq!(
+                labeled.labels.first().map(|label| label.span),
+                Some(input_span)
+            );
+            assert_eq!(
+                labeled.help.as_deref(),
+                Some("use `head`, `index`, `worktree`, or a revision")
+            );
+        }
+
+        #[rstest]
+        fn points_an_empty_revision_at_the_revision() {
+            let revision_span = Span::new(3, 9);
+            let labeled = CommandError::EmptyRevision {
+                span: revision_span,
+            }
+            .into_labeled(Span::test_data());
+
+            assert_eq!(
+                labeled.labels.first().map(|label| label.span),
+                Some(revision_span)
+            );
+            assert_eq!(
+                labeled.help.as_deref(),
+                Some("provide a non-empty revision expression")
+            );
+        }
+
+        #[rstest]
+        fn points_an_invalid_side_record_at_the_record() {
+            let record_span = Span::new(3, 9);
+            let labeled = CommandError::InvalidSideRecord { span: record_span }
+                .into_labeled(Span::test_data());
+
+            assert_eq!(
+                labeled.labels.first().map(|label| label.span),
+                Some(record_span)
+            );
+            assert_eq!(
+                labeled.help.as_deref(),
+                Some("use a record with exactly one `rev` field")
+            );
+        }
+
+        #[rstest]
+        fn points_an_invalid_side_field_at_the_field_value() {
+            let field_span = Span::new(3, 9);
+            let labeled = CommandError::InvalidSideField {
+                field: "rev",
+                got: "int".to_owned(),
+                span: field_span,
+            }
+            .into_labeled(Span::test_data());
+
+            assert_eq!(
+                labeled.labels.first().map(|label| label.span),
+                Some(field_span)
+            );
+            assert_eq!(
+                labeled.help.as_deref(),
+                Some("the `rev` field must contain a revision string")
+            );
+        }
 
         #[rstest]
         fn points_wrong_input_at_the_input() {

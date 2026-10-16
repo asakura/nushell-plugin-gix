@@ -12,13 +12,16 @@
     )
 )]
 
-mod cdt;
+pub mod cdt;
 mod commands;
+pub mod side;
 
 use nu_plugin_gix_core::Registry;
 
 use nu_plugin::{EngineInterface, MsgPackSerializer, Plugin, PluginCommand, serve_plugin};
 use nu_protocol::{CustomValue, LabeledError};
+
+pub use side::SideArg;
 
 /// The plugin entry point registered with Nushell.
 #[derive(Debug, Default)]

@@ -66,6 +66,13 @@ commands = "one PluginCommand per Nushell command; signature(), description and 
 git     = "src/git/: all gix access; MUST NOT import nu_protocol/nu_plugin (grep src/git for nu_ must stay empty); no Span, Value, LabeledError, CustomValue"
 nushell = "src/commands/ + src/cdt/ (custom data types): PluginCommands, CustomValues, Value/record mapping, LabeledError conversion; MUST NOT touch gix types (tests may call gix to build fixtures)"
 api     = "git module exposes domain types (CommitInfo, GixError) and plain-Rust fns/iterators; gix types may live inside git-side state objects but never cross into src/cdt or src/commands; mod.rs only declares modules and re-exports"
+# exception: gix::ObjectId and gix::revision::plumbing::Spec may appear in git-side
+# domain types that serialize into cdt handles (e.g. Side). Justification: the workspace
+# controls the compiled feature set (sha1 only, bumps deliberate), so the enums are total
+# in practice; they are #[non_exhaustive] only against future gix additions, and gix
+# versions are pinned; they carry plain digests and derive Copy/Eq/serde (Spec is
+# documented by gix as suitable for serialization and thread movement). Repository-bound
+# gix types (Repository, an attached Spec, ...) remain banned from serialized handles.
 errors  = "git::GixError is Nushell-free; commands::CommandError wraps it (#[from]) plus argument errors (e.g. NegativeLimit) and owns into_labeled(span), called only at run/stream-mapping boundaries"
 values  = "cdt values are stateful handles: they serialize only an id plus the self-describing fields needed to rebuild their state (git dir, sides, oids, validity stamp); the state itself (may hold gix types) lives plugin-side in a git-side registry that is only a cache"
 state   = "registry entries are Arc'd immutable snapshots + a stamp; every use validates the stamp: content-addressed state never goes stale; live state (index/worktree/refs/config) is revalidated on reads and compare-and-swap on writes (stale-changeset, nothing applied)"

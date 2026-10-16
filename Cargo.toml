@@ -19,12 +19,15 @@ gix = { version = "0.89", default-features = false, features = [
   "sha1",
   "blob-diff",
   "parallel",
+  "revision",
+  "serde",
 ] }
 nu-plugin = "0.112.2"
 nu-plugin-gix-core = { version = "0.1.0", path = "nu-plugin-gix-core" }
 nu-protocol = "0.112.2"
 rstest = { version = "0.27", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0", default-features = false, features = ["std"] }
 tempfile = "3.27"
 thiserror = "2.0"
 typetag = "0.2"
