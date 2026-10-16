@@ -161,7 +161,7 @@ fn load(location: &RepositoryLocation) -> Result<OpenRepository, GixError> {
 mod tests {
     use super::*;
 
-    use crate::git::discover;
+    use crate::discover;
 
     use rstest::{fixture, rstest};
     use tempfile::TempDir;

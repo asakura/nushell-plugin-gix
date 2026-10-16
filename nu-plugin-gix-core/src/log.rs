@@ -140,7 +140,7 @@ fn commit_info(repo: &gix::Repository, id: gix::ObjectId) -> Result<CommitInfo, 
 mod tests {
     use super::*;
 
-    use crate::git::{Registry, discover};
+    use crate::{Registry, discover};
 
     use gix::actor::SignatureRef;
     use rstest::{fixture, rstest};

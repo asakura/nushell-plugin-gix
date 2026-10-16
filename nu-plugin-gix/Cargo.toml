@@ -1,0 +1,32 @@
+[package]
+name = "nu_plugin_gix"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "A Nushell plugin exposing gix (gitoxide)"
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["nushell", "plugin", "git", "gix"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "nu_plugin_gix"
+path = "src/main.rs"
+
+[dependencies]
+nu-plugin = { workspace = true }
+nu-plugin-gix-core = { workspace = true }
+nu-protocol = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+typetag = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
+gix = { workspace = true }
+rstest = { workspace = true }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

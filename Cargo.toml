@@ -1,16 +1,19 @@
-[package]
+[workspace]
+members = ["nu-plugin-gix", "nu-plugin-gix-core"]
+resolver = "2"
+
+[workspace.metadata.crane]
 name = "nu_plugin_gix"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 authors = ["Mikalai Seva"]
-description = "A Nushell plugin exposing gix (gitoxide)"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/asakura/nushell-plugin-gix"
 readme = "README.md"
-keywords = ["nushell", "plugin", "git", "gix"]
-categories = ["command-line-utilities", "development-tools"]
 
-[dependencies]
+[workspace.dependencies]
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 gix = { version = "0.89", default-features = false, features = [
   "sha1",
@@ -18,16 +21,15 @@ gix = { version = "0.89", default-features = false, features = [
   "parallel",
 ] }
 nu-plugin = "0.112.2"
+nu-plugin-gix-core = { version = "0.1.0", path = "nu-plugin-gix-core" }
 nu-protocol = "0.112.2"
+rstest = { version = "0.27", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
+tempfile = "3.27"
 thiserror = "2.0"
 typetag = "0.2"
 
-[dev-dependencies]
-rstest = { version = "0.27", default-features = false }
-tempfile = "3.27"
-
-[lints.rust]
+[workspace.lints.rust]
 # Safety — forbid means even #![allow(...)] can't override
 unsafe_code = "forbid"
 non_ascii_idents = "forbid"
@@ -45,10 +47,10 @@ missing_debug_implementations = "deny"
 missing_copy_implementations = "deny"
 unfulfilled_lint_expectations = "deny"
 
-[lints.rustdoc]
+[workspace.lints.rustdoc]
 all = { level = "deny", priority = -1 }
 
-[lints.clippy]
+[workspace.lints.clippy]
 # All lint groups
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }

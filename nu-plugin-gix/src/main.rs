@@ -14,9 +14,8 @@
 
 mod cdt;
 mod commands;
-mod git;
 
-use git::Registry;
+use nu_plugin_gix_core::Registry;
 
 use nu_plugin::{EngineInterface, MsgPackSerializer, Plugin, PluginCommand, serve_plugin};
 use nu_protocol::{CustomValue, LabeledError};

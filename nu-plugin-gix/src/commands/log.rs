@@ -1,9 +1,7 @@
 //! `gix log`: stream the commits of an opened repository as a Nushell `ListStream`.
 
-use crate::{
-    cdt::Repository,
-    git::{self, CommitInfo, GixError},
-};
+use crate::cdt::Repository;
+use nu_plugin_gix_core::{self as git, CommitInfo, GixError};
 
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
