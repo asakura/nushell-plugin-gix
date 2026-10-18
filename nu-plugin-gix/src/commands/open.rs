@@ -69,14 +69,13 @@ fn run_open(
     repo: Option<Spanned<PathBuf>>,
 ) -> Result<Repository, CommandError> {
     let found = match repo {
-        None => git::discover(cwd)?,
-        Some(Spanned { item, span }) => {
-            git::discover(&cwd.join(&item)).map_err(|source| CommandError::NotARepository {
+        None => git::RepositoryLocation::discover(cwd)?,
+        Some(Spanned { item, span }) => git::RepositoryLocation::discover(&cwd.join(&item))
+            .map_err(|source| CommandError::NotARepository {
                 path: item,
                 span,
                 source,
-            })?
-        }
+            })?,
     };
 
     let id = registry.register(&found)?;

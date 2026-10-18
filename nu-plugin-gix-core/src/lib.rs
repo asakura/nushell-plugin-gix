@@ -14,14 +14,14 @@
 
 mod error;
 mod log;
-mod open;
 mod registry;
+mod repository;
 mod side;
 
 pub use self::{
     error::GixError,
     log::{CommitInfo, log},
-    open::{RepositoryLocation, discover},
-    registry::{OpenRepository, Registry},
+    registry::Registry,
+    repository::{OpenRepository, RepositoryLocation},
     side::{ResolvedRevision, Side},
 };

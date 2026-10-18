@@ -17,6 +17,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+nu-plugin-gix-testing-support = { workspace = true }
 rstest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
