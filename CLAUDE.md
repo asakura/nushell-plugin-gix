@@ -83,6 +83,8 @@ doctest = "bin crate => no doctests; if the git side needs tested examples, extr
 
 [antirot]
 rules = "del dead-code (no commented-out blocks; no #[expect(dead_code)] on prod items); no-TODO (CI greps for TODO/FIXME/HACK/XXX in *.rs); ≥2-callers; docs-same-commit; tests-guard-intent; no-defensive-impossible"
+# exception: nu-plugin-gix-testing-support is exempt from ≥2-callers — a fixture there may have a single user,
+# because it encodes git's on-disk layout and keeps that knowledge out of the test modules
 
 [workflow]
 # Every arrow is a BLOCKING gate — do not proceed until the current step is complete

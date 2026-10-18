@@ -59,6 +59,27 @@ const CONFIG_FILE: &str = "config";
 /// Repository configuration that cannot be parsed: the `[core]` section header is never closed.
 const CORRUPT_CONFIG: &str = "[core\n";
 
+/// Directory inside the main git directory that holds one private git directory per linked worktree.
+const WORKTREES_DIR: &str = "worktrees";
+
+/// Name of the directory the linked worktree is created in, next to the main worktree.
+const LINKED_WORKTREE_NAME: &str = "linked";
+
+/// File in a linked worktree's git directory that points back at the main git directory.
+const COMMON_DIR_FILE: &str = "commondir";
+
+/// Contents of [`COMMON_DIR_FILE`]: the main git directory, relative to the linked git directory.
+const COMMON_DIR_TARGET: &str = "../..";
+
+/// File in a linked worktree's git directory that records the path of the worktree's `.git` file.
+const GITDIR_FILE: &str = "gitdir";
+
+/// Prefix of a `.git` file that points at the git directory of a linked worktree.
+const GITDIR_POINTER_PREFIX: &str = "gitdir: ";
+
+/// Prefix of a `HEAD` file that names the branch it points at.
+const SYMBOLIC_REF_PREFIX: &str = "ref: ";
+
 /// Branch that every fixture repository's `HEAD` names; [`test_repo`] also commits to it.
 pub const MAIN_BRANCH: &str = "refs/heads/main";
 
@@ -143,6 +164,18 @@ impl CorruptTestRepo {
     }
 }
 
+/// A throwaway repository with a linked worktree, laid out as `git worktree add` lays it out.
+///
+/// Returned by [`linked_repo`]. The worktree directory can be deleted while its private git directory under the main
+/// repository remains.
+#[derive(Debug)]
+pub struct LinkedTestRepo {
+    /// The temporary directory backing the main repository and the linked worktree (dropped last).
+    pub dir: TempDir,
+    /// The absolute path of the linked worktree's root, inside `dir`.
+    pub worktree: PathBuf,
+}
+
 /// A throwaway repository in a temporary directory with two commits on `refs/heads/main`.
 ///
 /// Keeps the `TempDir` alive; pass [`TestRepo::path`] to `gix open --repo`.
@@ -224,6 +257,44 @@ pub fn corrupt_repo() -> Result<CorruptTestRepo, FixtureError> {
     fs::write(repo.path().join(GIT_DIR).join(CONFIG_FILE), CORRUPT_CONFIG)?;
 
     Ok(CorruptTestRepo { dir: repo.dir })
+}
+
+/// A main repository like [`unborn_repo`] plus one linked worktree whose `HEAD` names [`MAIN_BRANCH`].
+#[fixture]
+pub fn linked_repo() -> Result<LinkedTestRepo, FixtureError> {
+    let dir = unborn_repo()?.dir;
+    let worktree = dir.path().join(LINKED_WORKTREE_NAME);
+
+    let git_dir = dir
+        .path()
+        .join(GIT_DIR)
+        .join(WORKTREES_DIR)
+        .join(LINKED_WORKTREE_NAME);
+
+    fs::create_dir_all(&worktree)?;
+    fs::create_dir_all(&git_dir)?;
+
+    fs::write(
+        git_dir.join(COMMON_DIR_FILE),
+        format!("{COMMON_DIR_TARGET}\n"),
+    )?;
+
+    fs::write(
+        git_dir.join(GITDIR_FILE),
+        format!("{}\n", worktree.join(GIT_DIR).display()),
+    )?;
+
+    fs::write(
+        git_dir.join(HEAD_FILE),
+        format!("{SYMBOLIC_REF_PREFIX}{MAIN_BRANCH}\n"),
+    )?;
+
+    fs::write(
+        worktree.join(GIT_DIR),
+        format!("{GITDIR_POINTER_PREFIX}{}\n", git_dir.display()),
+    )?;
+
+    Ok(LinkedTestRepo { dir, worktree })
 }
 
 /// Builds the two-commit fixture repository.
