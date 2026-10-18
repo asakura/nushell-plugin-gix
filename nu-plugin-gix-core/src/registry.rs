@@ -178,8 +178,8 @@ mod tests {
     use super::*;
 
     use nu_plugin_gix_testing_support::{
-        CorruptTestRepo, FixtureError, GIT_DIR, HEAD_FILE, MAIN_BRANCH, UnbornTestRepo,
-        corrupt_repo, plain_dir, unborn_repo,
+        CorruptTestRepo, FixtureError, HEAD_FILE, LinkedTestRepo, UnbornTestRepo, corrupt_repo,
+        linked_repo, plain_dir, unborn_repo,
     };
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
@@ -187,27 +187,6 @@ mod tests {
     use std::{assert_matches, fs, io, iter, sync::Barrier, thread};
 
     const THREADS: usize = 8;
-
-    /// Directory inside the main git directory that holds one private git directory per linked worktree.
-    const WORKTREES_DIR: &str = "worktrees";
-
-    /// Name of the directory a linked worktree is created in, next to the main worktree.
-    const LINKED_WORKTREE_NAME: &str = "linked";
-
-    /// File in a linked worktree's git directory that points back at the main git directory.
-    const COMMON_DIR_FILE: &str = "commondir";
-
-    /// Contents of [`COMMON_DIR_FILE`]: the main git directory, relative to the linked git directory.
-    const COMMON_DIR_TARGET: &str = "../..";
-
-    /// File in a linked worktree's git directory that records the path of the worktree's `.git` file.
-    const GITDIR_FILE: &str = "gitdir";
-
-    /// Prefix of a `.git` file that points at the git directory of a linked worktree.
-    const GITDIR_POINTER_PREFIX: &str = "gitdir: ";
-
-    /// Prefix of a `HEAD` file that names the branch it points at.
-    const SYMBOLIC_REF_PREFIX: &str = "ref: ";
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {
@@ -235,41 +214,12 @@ mod tests {
         Ok((dir, location, Registry::new()))
     }
 
-    /// A linked worktree of a fresh repository, laid out as `git worktree add` lays it out.
-    ///
-    /// Its directory can be deleted while its private git directory under the main repository
-    /// remains, and the returned `TempDir` keeps both alive.
+    /// A linked worktree of a fresh repository, with the directory that keeps it alive.
     #[fixture]
     fn linked_worktree(
-        unborn_repo: Result<UnbornTestRepo, FixtureError>,
+        linked_repo: Result<LinkedTestRepo, FixtureError>,
     ) -> Result<(TempDir, RepositoryLocation), TestError> {
-        let dir = unborn_repo?.dir;
-        let worktree = dir.path().join(LINKED_WORKTREE_NAME);
-        let git_dir = dir
-            .path()
-            .join(GIT_DIR)
-            .join(WORKTREES_DIR)
-            .join(LINKED_WORKTREE_NAME);
-
-        fs::create_dir_all(&worktree)?;
-        fs::create_dir_all(&git_dir)?;
-        fs::write(
-            git_dir.join(COMMON_DIR_FILE),
-            format!("{COMMON_DIR_TARGET}\n"),
-        )?;
-        fs::write(
-            git_dir.join(GITDIR_FILE),
-            format!("{}\n", worktree.join(GIT_DIR).display()),
-        )?;
-        fs::write(
-            git_dir.join(HEAD_FILE),
-            format!("{SYMBOLIC_REF_PREFIX}{MAIN_BRANCH}\n"),
-        )?;
-        fs::write(
-            worktree.join(GIT_DIR),
-            format!("{GITDIR_POINTER_PREFIX}{}\n", git_dir.display()),
-        )?;
-
+        let LinkedTestRepo { dir, worktree } = linked_repo?;
         let location = RepositoryLocation::discover(&worktree)?;
 
         Ok((dir, location))
