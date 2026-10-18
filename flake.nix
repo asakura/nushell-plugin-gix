@@ -52,7 +52,11 @@
         # neutralising nightly-only -Z flags.  The explicit linker overrides
         # the config-level [target.xxx].linker, avoiding pinned store paths or
         # absent system binaries.
-        cargoHookEnv = "CARGO_ENCODED_RUSTFLAGS='' CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=${pkgs.stdenv.cc}/bin/cc";
+        # Those overrides change cargo's fingerprints, so the hooks get their own
+        # target dir (relative to the repo root, where prek runs them); sharing
+        # target/ with interactive builds would rebuild every dependency each time
+        # the two alternate.
+        cargoHookEnv = "CARGO_TARGET_DIR=target/hooks CARGO_ENCODED_RUSTFLAGS='' CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=${pkgs.stdenv.cc}/bin/cc";
 
         gitHooksCheck = git-hooks.lib.${system}.run {
           src = ./.;
