@@ -14,6 +14,8 @@
 
 pub mod cdt;
 mod commands;
+#[cfg(test)]
+mod fixtures;
 pub mod side;
 
 use nu_plugin_gix_core::Registry;
