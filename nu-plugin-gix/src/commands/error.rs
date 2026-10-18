@@ -6,12 +6,14 @@
 
 use nu_plugin_gix_core::GixError;
 
-use nu_protocol::{LabeledError, Span};
+use nu_protocol::{LabeledError, ShellError, Span};
 
 use std::{error::Error as _, path::PathBuf};
 
 const NOT_A_REPOSITORY_CODE: &str = "gix::not-a-repository";
 const OPEN_FAILED_CODE: &str = "gix::open-failed";
+const CURRENT_DIR_CODE: &str = "gix::current-dir-unavailable";
+const INVALID_ARGUMENT_CODE: &str = "gix::invalid-argument";
 const BAD_REVISION_CODE: &str = "gix::bad-revision";
 const INVALID_REVISION_CODE: &str = "gix::invalid-revision";
 const WALK_FAILED_CODE: &str = "gix::walk-failed";
@@ -27,6 +29,8 @@ const INVALID_SIDE_CODE: &str = "gix::invalid-side";
 const ALL_CODES: &[&str] = &[
     NOT_A_REPOSITORY_CODE,
     OPEN_FAILED_CODE,
+    CURRENT_DIR_CODE,
+    INVALID_ARGUMENT_CODE,
     BAD_REVISION_CODE,
     INVALID_REVISION_CODE,
     WALK_FAILED_CODE,
@@ -39,6 +43,10 @@ const ALL_CODES: &[&str] = &[
 ];
 
 const INVALID_SIDE_LABEL: &str = "invalid side";
+
+/// Label for a repository that was found but cannot be opened.
+const UNOPENABLE_LABEL: &str =
+    "the repository was found but could not be opened; it may be corrupt";
 
 /// What a command needed and what its pipeline input actually was.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,6 +78,38 @@ pub enum CommandError {
         /// The underlying git-layer failure.
         #[source]
         source: GixError,
+    },
+
+    /// The repository named by `--repo` was found but cannot be opened.
+    #[error("could not open git repository at '{}'", path.display())]
+    OpenFailed {
+        /// The path as the caller wrote it.
+        path: PathBuf,
+        /// Span of the `--repo` value.
+        span: Span,
+        /// The underlying git-layer failure.
+        #[source]
+        source: GixError,
+    },
+
+    /// The engine could not report the current directory.
+    #[error("could not read the current directory")]
+    CurrentDir {
+        /// The engine's failure.
+        #[source]
+        source: Box<ShellError>,
+        /// Span of the command call.
+        span: Span,
+    },
+
+    /// An argument of the call could not be read.
+    #[error("could not read the command arguments")]
+    InvalidArgument {
+        /// The failure reported while reading the argument.
+        #[source]
+        source: Box<ShellError>,
+        /// Span of the argument, or of the call when it names no argument.
+        span: Span,
     },
 
     /// The pipeline input is not the handle type the command works on.
@@ -139,6 +179,11 @@ impl CommandError {
                 path: _path,
                 span: _span,
                 source: found,
+            }
+            | Self::OpenFailed {
+                path: _path,
+                span: _span,
+                source: found,
             } => found.source(),
             Self::Git(_)
             | Self::NegativeLimit(_)
@@ -147,7 +192,9 @@ impl CommandError {
             | Self::EmptyRevision { .. }
             | Self::InvalidObjectId { .. }
             | Self::InvalidSideRecord { .. }
-            | Self::InvalidSideField { .. } => self.source(),
+            | Self::InvalidSideField { .. }
+            | Self::CurrentDir { .. }
+            | Self::InvalidArgument { .. } => self.source(),
         };
 
         while let Some(err) = source {
@@ -204,6 +251,9 @@ impl CommandError {
         match self {
             Self::Git(git) => git_code(git),
             Self::NotARepository { .. } => Some(NOT_A_REPOSITORY_CODE),
+            Self::OpenFailed { .. } => Some(OPEN_FAILED_CODE),
+            Self::CurrentDir { .. } => Some(CURRENT_DIR_CODE),
+            Self::InvalidArgument { .. } => Some(INVALID_ARGUMENT_CODE),
             Self::WrongInput(_) => Some(WRONG_INPUT_CODE),
             Self::NegativeLimit(_) => Some(NEGATIVE_LIMIT_CODE),
             Self::InvalidSideType { .. }
@@ -225,13 +275,20 @@ impl CommandError {
                 span: flag_span,
                 path: _path,
                 source: _source,
+            }
+            | Self::OpenFailed {
+                span: flag_span,
+                path: _path,
+                source: _source,
             } => Some(*flag_span),
             Self::WrongInput(input) => Some(input.span),
             Self::InvalidSideType { span, .. }
             | Self::EmptyRevision { span }
             | Self::InvalidObjectId { span, .. }
             | Self::InvalidSideRecord { span }
-            | Self::InvalidSideField { span, .. } => Some(*span),
+            | Self::InvalidSideField { span, .. }
+            | Self::CurrentDir { span, .. }
+            | Self::InvalidArgument { span, .. } => Some(*span),
             Self::Git(_) | Self::NegativeLimit(_) => None,
         }
     }
@@ -247,6 +304,9 @@ impl CommandError {
                 span: _span,
                 source: _source,
             } => Some("no git repository found at this path"),
+            Self::OpenFailed { .. } => Some(UNOPENABLE_LABEL),
+            Self::CurrentDir { .. } => Some("the engine did not report a working directory"),
+            Self::InvalidArgument { .. } => Some("this argument could not be read"),
             Self::NegativeLimit(_) => Some("expected a non-negative integer"),
             Self::InvalidSideType { .. } => Some("use `head`, `index`, `worktree`, or a revision"),
             Self::EmptyRevision { .. } => Some("provide a non-empty revision expression"),
@@ -262,7 +322,7 @@ impl CommandError {
             Self::Git(GixError::Open {
                 path: _path,
                 source: _source,
-            }) => Some("the repository was found but could not be opened; it may be corrupt"),
+            }) => Some(UNOPENABLE_LABEL),
             Self::Git(GixError::RepositoryGone { git_dir: _git_dir }) => Some(
                 "the repository is no longer at this location; run `gix open` again if it moved",
             ),
@@ -286,6 +346,9 @@ impl CommandError {
             Self::InvalidSideField { .. } => Some("the `rev` field must contain a revision string"),
             Self::Git(_)
             | Self::NotARepository { .. }
+            | Self::OpenFailed { .. }
+            | Self::CurrentDir { .. }
+            | Self::InvalidArgument { .. }
             | Self::WrongInput(_)
             | Self::NegativeLimit(_) => None,
         }
