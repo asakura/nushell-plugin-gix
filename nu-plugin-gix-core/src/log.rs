@@ -140,7 +140,7 @@ fn commit_info(repo: &gix::Repository, id: gix::ObjectId) -> Result<CommitInfo, 
 mod tests {
     use super::*;
 
-    use crate::{Registry, discover};
+    use crate::{Registry, RepositoryLocation};
 
     use gix::actor::SignatureRef;
     use rstest::{fixture, rstest};
@@ -205,7 +205,7 @@ mod tests {
 
     /// The registered `OpenRepository` for the repository at `path`.
     fn opened_at(path: &Path) -> Result<Arc<OpenRepository>, TestError> {
-        let location = discover(path)?;
+        let location = RepositoryLocation::discover(path)?;
         let registry = Registry::new();
         let id = registry.register(&location)?;
 

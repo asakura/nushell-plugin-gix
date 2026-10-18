@@ -316,7 +316,7 @@ const fn git_code(error: &GixError) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    use nu_plugin_gix_core::discover;
+    use nu_plugin_gix_core::RepositoryLocation;
 
     use rstest::rstest;
 
@@ -332,7 +332,7 @@ mod tests {
 
     /// The error `git::discover` gives for a path outside any repository.
     fn missing_repository() -> Result<GixError, TestError> {
-        discover(Path::new(MISSING_PATH))
+        RepositoryLocation::discover(Path::new(MISSING_PATH))
             .err()
             .ok_or_else(|| TestError::Failure("expected an error".to_owned()))
     }

@@ -2384,6 +2384,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "gix",
+ "nu-plugin-gix-testing-support",
  "rstest",
  "serde",
  "serde_json",
