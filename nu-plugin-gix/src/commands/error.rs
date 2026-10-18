@@ -14,6 +14,7 @@ const NOT_A_REPOSITORY_CODE: &str = "gix::not-a-repository";
 const OPEN_FAILED_CODE: &str = "gix::open-failed";
 const REPOSITORY_GONE_CODE: &str = "gix::repository-gone";
 const CURRENT_DIR_CODE: &str = "gix::current-dir-unavailable";
+const HELP_UNAVAILABLE_CODE: &str = "gix::help-unavailable";
 const INVALID_ARGUMENT_CODE: &str = "gix::invalid-argument";
 const INVALID_INPUT_CODE: &str = "gix::invalid-input";
 const BAD_REVISION_CODE: &str = "gix::bad-revision";
@@ -34,6 +35,7 @@ const ALL_CODES: &[&str] = &[
     OPEN_FAILED_CODE,
     REPOSITORY_GONE_CODE,
     CURRENT_DIR_CODE,
+    HELP_UNAVAILABLE_CODE,
     INVALID_ARGUMENT_CODE,
     INVALID_INPUT_CODE,
     BAD_REVISION_CODE,
@@ -125,6 +127,16 @@ pub enum CommandError {
     /// The engine could not report the current directory.
     #[error("could not read the current directory")]
     CurrentDir {
+        /// The engine's failure.
+        #[source]
+        source: Box<ShellError>,
+        /// Span of the command call.
+        span: Span,
+    },
+
+    /// The engine could not report the help text of a command.
+    #[error("could not read the command help")]
+    HelpUnavailable {
         /// The engine's failure.
         #[source]
         source: Box<ShellError>,
@@ -233,6 +245,7 @@ impl CommandError {
             | Self::InvalidSideRecord { .. }
             | Self::InvalidSideField { .. }
             | Self::CurrentDir { .. }
+            | Self::HelpUnavailable { .. }
             | Self::InvalidArgument { .. }
             | Self::InvalidInput { .. } => self.source(),
         };
@@ -293,6 +306,7 @@ impl CommandError {
             Self::NotARepository { .. } => Some(NOT_A_REPOSITORY_CODE),
             Self::OpenFailed { .. } | Self::HandleOpenFailed { .. } => Some(OPEN_FAILED_CODE),
             Self::CurrentDir { .. } => Some(CURRENT_DIR_CODE),
+            Self::HelpUnavailable { .. } => Some(HELP_UNAVAILABLE_CODE),
             Self::InvalidArgument { .. } => Some(INVALID_ARGUMENT_CODE),
             Self::InvalidInput { .. } => Some(INVALID_INPUT_CODE),
             Self::HandleRepositoryGone { .. } => Some(REPOSITORY_GONE_CODE),
@@ -330,6 +344,7 @@ impl CommandError {
             | Self::InvalidSideRecord { span }
             | Self::InvalidSideField { span, .. }
             | Self::CurrentDir { span, .. }
+            | Self::HelpUnavailable { span, .. }
             | Self::InvalidArgument { span, .. }
             | Self::InvalidInput { span, .. }
             | Self::HandleRepositoryGone { span, .. }
@@ -352,6 +367,7 @@ impl CommandError {
             } => Some("no git repository found at this path"),
             Self::OpenFailed { .. } => Some(UNOPENABLE_LABEL),
             Self::CurrentDir { .. } => Some("the engine did not report a working directory"),
+            Self::HelpUnavailable { .. } => Some("the engine did not report the help text"),
             Self::InvalidArgument { .. } => Some("this argument could not be read"),
             Self::InvalidInput { .. } => Some("this input could not be read"),
             Self::HandleRepositoryGone { .. } => {
@@ -401,6 +417,7 @@ impl CommandError {
             | Self::NotARepository { .. }
             | Self::OpenFailed { .. }
             | Self::CurrentDir { .. }
+            | Self::HelpUnavailable { .. }
             | Self::InvalidArgument { .. }
             | Self::InvalidInput { .. }
             | Self::HandleRepositoryGone { .. }
