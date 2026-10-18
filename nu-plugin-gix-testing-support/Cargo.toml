@@ -1,0 +1,22 @@
+[package]
+name = "nu-plugin-gix-testing-support"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Shared git repository and plugin-engine fixtures for nushell-plugin-gix tests; not published"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+gix = { workspace = true }
+nu-cmd-lang = { workspace = true }
+nu-plugin = { workspace = true }
+nu-plugin-test-support = { workspace = true }
+nu-protocol = { workspace = true }
+rstest = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

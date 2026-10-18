@@ -1,5 +1,9 @@
 [workspace]
-members = ["nu-plugin-gix", "nu-plugin-gix-core"]
+members = [
+  "nu-plugin-gix",
+  "nu-plugin-gix-core",
+  "nu-plugin-gix-testing-support",
+]
 resolver = "2"
 
 [workspace.metadata.crane]
@@ -14,6 +18,7 @@ repository = "https://github.com/asakura/nushell-plugin-gix"
 readme = "README.md"
 
 [workspace.dependencies]
+bstr = "1.13"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 gix = { version = "0.89", default-features = false, features = [
   "sha1",
@@ -22,9 +27,14 @@ gix = { version = "0.89", default-features = false, features = [
   "revision",
   "serde",
 ] }
+miette = "7.6"
+nu-cmd-lang = { version = "0.112.2", default-features = false }
 nu-plugin = "0.112.2"
 nu-plugin-gix-core = { version = "0.1.0", path = "nu-plugin-gix-core" }
+nu-plugin-gix-testing-support = { path = "nu-plugin-gix-testing-support" }
+nu-plugin-test-support = "0.112.2"
 nu-protocol = "0.112.2"
+nu-test-support = { version = "0.112.2", features = ["os"] }
 rstest = { version = "0.27", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
