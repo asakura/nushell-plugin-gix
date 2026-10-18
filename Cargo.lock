@@ -2531,8 +2531,11 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "gix",
+ "miette",
  "nu-plugin",
  "nu-plugin-gix-core",
+ "nu-plugin-gix-testing-support",
+ "nu-plugin-test-support",
  "nu-protocol",
  "rstest",
  "serde",
