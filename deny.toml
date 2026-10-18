@@ -24,6 +24,13 @@ unused-ignored-advisory = "warn"
 ignore = [
   { id = "RUSTSEC-2026-0253", reason = "lru is pulled in by nu-protocol 0.112.2; no compatible fix until Nushell bumps it" },
   { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is a build-time dependency of nu-derive-value; no replacement until Nushell migrates" },
+  { id = "RUSTSEC-2026-0194", reason = "quick-xml is pulled in by nu-command 0.112.2 via nu-test-support (dev-only); fix is 0.41.0, outside nu-command's requirement" },
+  { id = "RUSTSEC-2026-0195", reason = "quick-xml is pulled in by nu-command 0.112.2 via nu-test-support (dev-only); fix is 0.41.0, outside nu-command's requirement" },
+  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml is unmaintained and pulled in by nu-command 0.112.2 via nu-test-support (dev-only); no replacement until Nushell migrates" },
+  { id = "RUSTSEC-2024-0320", reason = "yaml-rust is unmaintained and pulled in by nu-command 0.112.2 via nu-test-support (dev-only); no replacement until Nushell migrates" },
+  { id = "RUSTSEC-2026-0367", reason = "zip 7.4.0 is pulled in by calamine 0.34 via nu-command 0.112.2 via nu-test-support (dev-only); fix is 9.0.0, outside calamine's requirement" },
+  { id = "RUSTSEC-2026-0368", reason = "zip 7.4.0 is pulled in by calamine 0.34 via nu-command 0.112.2 via nu-test-support (dev-only); fix is 9.0.0, outside calamine's requirement" },
+  { id = "RUSTSEC-2026-0369", reason = "zip 7.4.0 is pulled in by calamine 0.34 via nu-command 0.112.2 via nu-test-support (dev-only); fix is 9.0.0, outside calamine's requirement" },
 ]
 
 # https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
@@ -37,7 +44,7 @@ allow = [
   "BSD-3-Clause",
   "CC-PDDC",
   # "BSL-1.0",
-  # "CC0-1.0",
+  "CC0-1.0",
   "ISC",
   "MIT",
   "Unicode-3.0",
@@ -54,6 +61,7 @@ unused-allowed-license = "warn"
 multiple-versions = "warn"
 multiple-versions-include-dev = true
 wildcards = "deny"
+allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
