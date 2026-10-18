@@ -104,10 +104,6 @@ fn open_call(
 /// Discovery opens the repository once, and `registry` caches that same opened repository; the
 /// returned handle carries the cache key plus the on-disk locations needed to rebuild it after a
 /// plugin restart. With `--repo`, a missing or unopenable repository is reported at the flag's span.
-#[expect(
-    clippy::rest_pattern_accessible_field,
-    reason = "only the not-found and open-failed kinds carry the flag's span; other failures keep their own error"
-)]
 fn run_open(
     registry: &Registry,
     cwd: &Path,
@@ -118,18 +114,24 @@ fn run_open(
             None => registry.discover_and_register(cwd)?,
             Some(Spanned { item, span }) => registry
                 .discover_and_register(&cwd.join(&item))
-                .map_err(|source| match source {
-                    GixError::NotFound { .. } => CommandError::NotARepository {
+                .map_err(|source| match &source {
+                    GixError::NotFound {
+                        path: _path,
+                        source: _source,
+                    } => CommandError::NotARepository {
                         path: item,
                         span,
                         source,
                     },
-                    GixError::Open { .. } => CommandError::OpenFailed {
+                    GixError::Open {
+                        path: _path,
+                        source: _source,
+                    } => CommandError::OpenFailed {
                         path: item,
                         span,
                         source,
                     },
-                    other => CommandError::Git(other),
+                    _ => CommandError::Git(source),
                 })?,
         };
 
