@@ -348,7 +348,7 @@ mod tests {
             use super::*;
 
             #[rstest]
-            fn carries_the_first_line_as_summary(
+            fn maps_each_commit_to_a_row(
                 plugin_test: Result<PluginTest, FixtureError>,
                 test_repo: Result<TestRepo, FixtureError>,
             ) -> Result<(), TestError> {
@@ -356,59 +356,19 @@ mod tests {
 
                 let repo = test_repo?;
                 let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
-                let summaries = column_values(table.as_list()?, SUMMARY_COLUMN)?;
-
-                assert_eq!(summaries, [SECOND_COMMIT_MESSAGE, FIRST_COMMIT_MESSAGE]);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn carries_the_committer_name(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
+                let rows = table.as_list()?;
                 let newest = single_row(&table, EXPECTED_ROW)?;
-
-                assert_eq!(column(newest, AUTHOR_COLUMN)?, COMMITTER_NAME);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn carries_the_committer_email(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
-                let newest = single_row(&table, EXPECTED_ROW)?;
-
-                assert_eq!(column(newest, EMAIL_COLUMN)?, COMMITTER_EMAIL);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn carries_the_commit_hashes(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
 
                 assert_eq!(
-                    column_values(table.as_list()?, HASH_COLUMN)?,
+                    column_values(rows, HASH_COLUMN)?,
                     [repo.head.as_str(), repo.parent.as_str()]
                 );
+                assert_eq!(
+                    column_values(rows, SUMMARY_COLUMN)?,
+                    [SECOND_COMMIT_MESSAGE, FIRST_COMMIT_MESSAGE]
+                );
+                assert_eq!(column(newest, AUTHOR_COLUMN)?, COMMITTER_NAME);
+                assert_eq!(column(newest, EMAIL_COLUMN)?, COMMITTER_EMAIL);
 
                 Ok(())
             }
@@ -418,7 +378,7 @@ mod tests {
             use super::*;
 
             #[rstest]
-            fn carries_the_committer_name(
+            fn carries_the_first_commit(
                 plugin_test: Result<PluginTest, FixtureError>,
                 test_repo: Result<TestRepo, FixtureError>,
             ) -> Result<(), TestError> {
@@ -429,37 +389,7 @@ mod tests {
                 let oldest = oldest_row(&table, EXPECTED_ROW)?;
 
                 assert_eq!(column(oldest, AUTHOR_COLUMN)?, COMMITTER_NAME);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn carries_the_committer_email(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
-                let oldest = oldest_row(&table, EXPECTED_ROW)?;
-
                 assert_eq!(column(oldest, EMAIL_COLUMN)?, COMMITTER_EMAIL);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn carries_the_first_commit_summary(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
-                let oldest = oldest_row(&table, EXPECTED_ROW)?;
-
                 assert_eq!(column(oldest, SUMMARY_COLUMN)?, FIRST_COMMIT_MESSAGE);
 
                 Ok(())
@@ -470,7 +400,7 @@ mod tests {
             use super::*;
 
             #[rstest]
-            fn is_a_date_value(
+            fn carries_each_commit_time_as_a_date_with_its_offset(
                 plugin_test: Result<PluginTest, FixtureError>,
                 forked_repo: Result<ForkedTestRepo, FixtureError>,
             ) -> Result<(), TestError> {
@@ -479,39 +409,10 @@ mod tests {
                 let repo = forked_repo?;
                 let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
                 let newest = single_row(&table, EXPECTED_ROW)?;
-
-                assert_matches!(field(newest, DATE_COLUMN)?, Value::Date { .. });
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn carries_the_newest_commit_time_with_its_offset(
-                plugin_test: Result<PluginTest, FixtureError>,
-                forked_repo: Result<ForkedTestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = forked_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
-                let newest = single_row(&table, EXPECTED_ROW)?;
-
-                assert_eq!(date_of(newest)?, MERGE_DATE);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn carries_the_oldest_commit_time(
-                plugin_test: Result<PluginTest, FixtureError>,
-                forked_repo: Result<ForkedTestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = forked_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
                 let oldest = oldest_row(&table, EXPECTED_ROW)?;
 
+                assert_matches!(field(newest, DATE_COLUMN)?, Value::Date { .. });
+                assert_eq!(date_of(newest)?, MERGE_DATE);
                 assert_eq!(date_of(oldest)?, ROOT_DATE);
 
                 Ok(())
