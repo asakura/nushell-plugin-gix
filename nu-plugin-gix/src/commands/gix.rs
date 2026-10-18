@@ -7,6 +7,9 @@ use super::super::GixPlugin;
 
 const COMMAND_NAME: &str = "gix";
 
+/// Nushell command category shared by every `gix` command.
+pub const CATEGORY: &str = "gix";
+
 /// Parent of all `gix` subcommands; prints the help listing them.
 #[derive(Clone, Copy, Debug)]
 pub struct Gix;
@@ -29,7 +32,7 @@ impl SimplePluginCommand for Gix {
     fn signature(&self) -> Signature {
         Signature::build(self.name())
             .input_output_type(Type::Nothing, Type::String)
-            .category(Category::Custom("gix".into()))
+            .category(Category::Custom(CATEGORY.into()))
     }
 
     fn search_terms(&self) -> Vec<&str> {
