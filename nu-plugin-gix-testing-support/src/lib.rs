@@ -47,6 +47,27 @@ pub const COMMITTER_EMAIL: &str = "ada@example.com";
 /// Timestamp of every fixture commit, as a Unix time followed by a UTC offset.
 pub const COMMITTER_TIME: &str = "1700000000 +0000";
 
+/// Subject of the fork point of [`forked_repo`], which is also its oldest commit.
+pub const FORK_ROOT_MESSAGE: &str = "root";
+
+/// Subject of the first parent of [`forked_repo`]'s merge; older than the second parent.
+pub const FORK_FIRST_PARENT_MESSAGE: &str = "side";
+
+/// Subject of the second parent of [`forked_repo`]'s merge; the newest commit besides `HEAD`.
+pub const FORK_SECOND_PARENT_MESSAGE: &str = "branch";
+
+/// Subject of the merge commit that [`forked_repo`] makes `HEAD`; the newest commit.
+pub const FORK_MERGE_MESSAGE: &str = "merge";
+
+/// Timestamp of [`forked_repo`]'s first parent (the root carries [`COMMITTER_TIME`]).
+pub const FORK_FIRST_PARENT_TIME: &str = "1700000100 +0000";
+
+/// Timestamp of [`forked_repo`]'s second parent, in a `+02:00` offset.
+pub const FORK_SECOND_PARENT_TIME: &str = "1700000200 +0200";
+
+/// Timestamp of [`forked_repo`]'s merge commit, in a `-05:00` offset.
+pub const FORK_MERGE_TIME: &str = "1700000300 -0500";
+
 /// Name of a repository's git directory inside its worktree.
 pub const GIT_DIR: &str = ".git";
 
@@ -198,6 +219,33 @@ impl TestRepo {
     }
 }
 
+/// A throwaway repository whose `HEAD` is a merge of two commits that fork from one root, each with its own commit time.
+///
+/// Returned by [`forked_repo`]. The first parent is older than the second, and the second is the newest commit besides
+/// `HEAD`, so newest-first by commit time differs from a first-parent walk (`merge`, `side`, `root`, `branch`).
+#[derive(Debug)]
+pub struct ForkedTestRepo {
+    /// The temporary directory backing the repository (dropped last).
+    pub dir: TempDir,
+    /// Hex id of the merge commit (`HEAD`), the newest commit.
+    pub head: String,
+    /// Hex id of the first parent of the merge.
+    pub first_parent: String,
+    /// Hex id of the second parent of the merge.
+    pub second_parent: String,
+    /// Hex id of the fork point, the oldest commit.
+    pub root: String,
+}
+
+impl ForkedTestRepo {
+    /// The absolute path of the repository; safe to pass to `gix open --repo` from any
+    /// engine working directory.
+    #[must_use = "returns the path; the repository is unchanged"]
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
 /// Initialises a repository in `dir` with the isolated open options, so the result does not depend
 /// on the user's or the system's git configuration.
 fn init_isolated(dir: &Path, kind: create::Kind) -> Result<gix::Repository, FixtureError> {
@@ -330,6 +378,65 @@ pub fn test_repo() -> Result<TestRepo, FixtureError> {
         dir,
         head: second.detach().to_string(),
         parent: first.detach().to_string(),
+    })
+}
+
+/// Builds the forked fixture repository: a root, two commits on it with distinct commit times, and a merge `HEAD`.
+///
+/// The first parent is committed through `HEAD`, which the merge then requires to name it. The second parent is
+/// written without a reference, so the merge can be committed on top of both.
+#[fixture]
+pub fn forked_repo() -> Result<ForkedTestRepo, FixtureError> {
+    let dir = TempDir::new()?;
+    let repo = init_isolated(dir.path(), create::Kind::WithWorktree)?;
+    point_head_at_main(&repo)?;
+
+    let tree = repo.write_object(Tree::empty())?.detach();
+
+    let root = repo.commit_as(
+        committer(COMMITTER_TIME),
+        committer(COMMITTER_TIME),
+        HEAD_REF,
+        FORK_ROOT_MESSAGE,
+        tree,
+        Vec::<gix::ObjectId>::new(),
+    )?;
+
+    let first_parent = repo.commit_as(
+        committer(FORK_FIRST_PARENT_TIME),
+        committer(FORK_FIRST_PARENT_TIME),
+        HEAD_REF,
+        FORK_FIRST_PARENT_MESSAGE,
+        tree,
+        vec![root.detach()],
+    )?;
+
+    let second_parent = repo
+        .new_commit_as(
+            committer(FORK_SECOND_PARENT_TIME),
+            committer(FORK_SECOND_PARENT_TIME),
+            FORK_SECOND_PARENT_MESSAGE,
+            tree,
+            vec![root.detach()],
+        )?
+        .id()
+        .detach();
+
+    let head = repo.commit_as(
+        committer(FORK_MERGE_TIME),
+        committer(FORK_MERGE_TIME),
+        HEAD_REF,
+        FORK_MERGE_MESSAGE,
+        tree,
+        vec![first_parent.detach(), second_parent],
+    )?;
+
+    Ok(ForkedTestRepo {
+        dir,
+        head: head.detach().to_string(),
+        first_parent: first_parent.detach().to_string(),
+        second_parent: second_parent.to_string(),
+        root: root.detach().to_string(),
     })
 }
 

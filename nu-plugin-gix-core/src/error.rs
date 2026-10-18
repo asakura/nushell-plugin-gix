@@ -70,4 +70,11 @@ pub enum GixError {
     /// The background thread that walks history could not be started.
     #[error("could not start the history walker")]
     Spawn(#[source] io::Error),
+
+    /// HEAD points at a branch that has no commits yet (e.g. a fresh repository).
+    #[error("HEAD points at branch '{name}', which has no commits yet")]
+    UnbornHead {
+        /// Full name of the unborn branch.
+        name: String,
+    },
 }

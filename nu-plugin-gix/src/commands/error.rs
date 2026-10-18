@@ -12,8 +12,10 @@ use std::{error::Error as _, path::PathBuf};
 
 const NOT_A_REPOSITORY_CODE: &str = "gix::not-a-repository";
 const OPEN_FAILED_CODE: &str = "gix::open-failed";
+const REPOSITORY_GONE_CODE: &str = "gix::repository-gone";
 const CURRENT_DIR_CODE: &str = "gix::current-dir-unavailable";
 const INVALID_ARGUMENT_CODE: &str = "gix::invalid-argument";
+const INVALID_INPUT_CODE: &str = "gix::invalid-input";
 const BAD_REVISION_CODE: &str = "gix::bad-revision";
 const INVALID_REVISION_CODE: &str = "gix::invalid-revision";
 const WALK_FAILED_CODE: &str = "gix::walk-failed";
@@ -23,14 +25,17 @@ const IO_CODE: &str = "gix::io";
 const WRONG_INPUT_CODE: &str = "gix::wrong-input";
 const NEGATIVE_LIMIT_CODE: &str = "gix::negative-limit";
 const INVALID_SIDE_CODE: &str = "gix::invalid-side";
+const UNBORN_HEAD_CODE: &str = "gix::unborn-head";
 
 /// Every stable code an error of this plugin can carry.
 #[cfg(test)]
 const ALL_CODES: &[&str] = &[
     NOT_A_REPOSITORY_CODE,
     OPEN_FAILED_CODE,
+    REPOSITORY_GONE_CODE,
     CURRENT_DIR_CODE,
     INVALID_ARGUMENT_CODE,
+    INVALID_INPUT_CODE,
     BAD_REVISION_CODE,
     INVALID_REVISION_CODE,
     WALK_FAILED_CODE,
@@ -40,6 +45,7 @@ const ALL_CODES: &[&str] = &[
     WRONG_INPUT_CODE,
     NEGATIVE_LIMIT_CODE,
     INVALID_SIDE_CODE,
+    UNBORN_HEAD_CODE,
 ];
 
 const INVALID_SIDE_LABEL: &str = "invalid side";
@@ -92,6 +98,30 @@ pub enum CommandError {
         source: GixError,
     },
 
+    /// The repository behind a pipeline handle was moved or deleted after the handle was made.
+    #[error("the git repository at '{}' behind this handle was moved or deleted", git_dir.display())]
+    HandleRepositoryGone {
+        /// The git directory that is no longer there.
+        git_dir: PathBuf,
+        /// Span of the handle value that was piped in.
+        span: Span,
+        /// The underlying git-layer failure.
+        #[source]
+        source: GixError,
+    },
+
+    /// The repository behind a pipeline handle was found again but cannot be reopened.
+    #[error("could not reopen the git repository at '{}' behind this handle", path.display())]
+    HandleOpenFailed {
+        /// The directory that could not be reopened.
+        path: PathBuf,
+        /// Span of the handle value that was piped in.
+        span: Span,
+        /// The underlying git-layer failure.
+        #[source]
+        source: GixError,
+    },
+
     /// The engine could not report the current directory.
     #[error("could not read the current directory")]
     CurrentDir {
@@ -112,13 +142,28 @@ pub enum CommandError {
         span: Span,
     },
 
+    /// The pipeline input could not be read.
+    #[error("could not read the pipeline input")]
+    InvalidInput {
+        /// The failure reported while reading the input.
+        #[source]
+        source: Box<ShellError>,
+        /// Span of the command call that received the input.
+        span: Span,
+    },
+
     /// The pipeline input is not the handle type the command works on.
     #[error("expected a `{}` value", .0.expected)]
     WrongInput(WrongInput),
 
     /// A negative value was given for the commit limit.
-    #[error("limit must not be negative, got {0}")]
-    NegativeLimit(i64),
+    #[error("limit must not be negative, got {limit}")]
+    NegativeLimit {
+        /// The negative limit as written.
+        limit: i64,
+        /// Span of the limit value.
+        span: Span,
+    },
 
     /// A side must be a string or a record.
     #[error("a side must be a string or a record, got {got}")]
@@ -175,18 +220,12 @@ impl CommandError {
         let mut chain = Vec::new();
 
         let mut source = match &self {
-            Self::NotARepository {
-                path: _path,
-                span: _span,
-                source: found,
-            }
-            | Self::OpenFailed {
-                path: _path,
-                span: _span,
-                source: found,
-            } => found.source(),
+            Self::NotARepository { source: found, .. }
+            | Self::OpenFailed { source: found, .. }
+            | Self::HandleRepositoryGone { source: found, .. }
+            | Self::HandleOpenFailed { source: found, .. } => found.source(),
             Self::Git(_)
-            | Self::NegativeLimit(_)
+            | Self::NegativeLimit { .. }
             | Self::WrongInput(_)
             | Self::InvalidSideType { .. }
             | Self::EmptyRevision { .. }
@@ -194,7 +233,8 @@ impl CommandError {
             | Self::InvalidSideRecord { .. }
             | Self::InvalidSideField { .. }
             | Self::CurrentDir { .. }
-            | Self::InvalidArgument { .. } => self.source(),
+            | Self::InvalidArgument { .. }
+            | Self::InvalidInput { .. } => self.source(),
         };
 
         while let Some(err) = source {
@@ -251,11 +291,13 @@ impl CommandError {
         match self {
             Self::Git(git) => git_code(git),
             Self::NotARepository { .. } => Some(NOT_A_REPOSITORY_CODE),
-            Self::OpenFailed { .. } => Some(OPEN_FAILED_CODE),
+            Self::OpenFailed { .. } | Self::HandleOpenFailed { .. } => Some(OPEN_FAILED_CODE),
             Self::CurrentDir { .. } => Some(CURRENT_DIR_CODE),
             Self::InvalidArgument { .. } => Some(INVALID_ARGUMENT_CODE),
+            Self::InvalidInput { .. } => Some(INVALID_INPUT_CODE),
+            Self::HandleRepositoryGone { .. } => Some(REPOSITORY_GONE_CODE),
             Self::WrongInput(_) => Some(WRONG_INPUT_CODE),
-            Self::NegativeLimit(_) => Some(NEGATIVE_LIMIT_CODE),
+            Self::NegativeLimit { .. } => Some(NEGATIVE_LIMIT_CODE),
             Self::InvalidSideType { .. }
             | Self::InvalidSideRecord { .. }
             | Self::InvalidSideField { .. } => Some(INVALID_SIDE_CODE),
@@ -288,8 +330,12 @@ impl CommandError {
             | Self::InvalidSideRecord { span }
             | Self::InvalidSideField { span, .. }
             | Self::CurrentDir { span, .. }
-            | Self::InvalidArgument { span, .. } => Some(*span),
-            Self::Git(_) | Self::NegativeLimit(_) => None,
+            | Self::InvalidArgument { span, .. }
+            | Self::InvalidInput { span, .. }
+            | Self::HandleRepositoryGone { span, .. }
+            | Self::HandleOpenFailed { span, .. }
+            | Self::NegativeLimit { span, .. } => Some(*span),
+            Self::Git(_) => None,
         }
     }
 
@@ -307,7 +353,14 @@ impl CommandError {
             Self::OpenFailed { .. } => Some(UNOPENABLE_LABEL),
             Self::CurrentDir { .. } => Some("the engine did not report a working directory"),
             Self::InvalidArgument { .. } => Some("this argument could not be read"),
-            Self::NegativeLimit(_) => Some("expected a non-negative integer"),
+            Self::InvalidInput { .. } => Some("this input could not be read"),
+            Self::HandleRepositoryGone { .. } => {
+                Some("this handle's repository is no longer at its location")
+            }
+            Self::HandleOpenFailed { .. } => {
+                Some("this handle's repository can no longer be opened; it may be corrupt")
+            }
+            Self::NegativeLimit { .. } => Some("expected a non-negative integer"),
             Self::InvalidSideType { .. } => Some("use `head`, `index`, `worktree`, or a revision"),
             Self::EmptyRevision { .. } => Some("provide a non-empty revision expression"),
             Self::InvalidObjectId { .. } => {
@@ -349,15 +402,18 @@ impl CommandError {
             | Self::OpenFailed { .. }
             | Self::CurrentDir { .. }
             | Self::InvalidArgument { .. }
+            | Self::InvalidInput { .. }
+            | Self::HandleRepositoryGone { .. }
+            | Self::HandleOpenFailed { .. }
             | Self::WrongInput(_)
-            | Self::NegativeLimit(_) => None,
+            | Self::NegativeLimit { .. } => None,
         }
     }
 }
 
 /// The stable code for a git-layer error.
 ///
-/// `RepositoryGone` stays uncoded: the handle-related codes are defined by issue #21.
+/// `RepositoryGone` stays uncoded: handle failures are coded by the handle errors that wrap it.
 #[expect(
     clippy::rest_pattern_accessible_field,
     reason = "codes classify error variants independently of their diagnostic data"
@@ -372,6 +428,7 @@ const fn git_code(error: &GixError) -> Option<&'static str> {
         GixError::Commit { .. } => Some(COMMIT_UNREADABLE_CODE),
         GixError::Timestamp { .. } => Some(BAD_TIMESTAMP_CODE),
         GixError::Spawn(_) => Some(IO_CODE),
+        GixError::UnbornHead { .. } => Some(UNBORN_HEAD_CODE),
     }
 }
 
@@ -505,7 +562,11 @@ mod tests {
 
         #[rstest]
         fn keeps_message_and_label() {
-            let labeled = CommandError::NegativeLimit(-3).into_labeled(Span::test_data());
+            let labeled = CommandError::NegativeLimit {
+                limit: -3,
+                span: Span::test_data(),
+            }
+            .into_labeled(Span::test_data());
 
             assert_eq!(labeled.msg, "limit must not be negative, got -3");
             assert_eq!(labeled.labels.len(), 1);
@@ -642,7 +703,13 @@ mod tests {
             }),
             WRONG_INPUT_CODE
         )]
-        #[case::negative_limit(CommandError::NegativeLimit(-3), NEGATIVE_LIMIT_CODE)]
+        #[case::negative_limit(
+            CommandError::NegativeLimit {
+                limit: -3,
+                span: Span::test_data(),
+            },
+            NEGATIVE_LIMIT_CODE
+        )]
         #[case::invalid_side_type(
             CommandError::InvalidSideType {
                 got: "int".to_owned(),

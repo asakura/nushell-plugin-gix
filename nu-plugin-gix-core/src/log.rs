@@ -4,7 +4,7 @@ use super::{GixError, OpenRepository};
 
 use chrono::{DateTime, FixedOffset};
 use commit::simple;
-use gix::{revision::walk::Sorting, traverse::commit};
+use gix::{head::Kind, revision::walk::Sorting, traverse::commit};
 
 use std::{
     sync::{
@@ -55,11 +55,18 @@ impl Iterator for CommitLog {
 ///
 /// # Errors
 ///
-/// Returns a [`GixError`] when HEAD has no commit or the
-/// walker thread cannot be started. Failures while reading individual commits are yielded by
+/// Returns [`GixError::UnbornHead`] when HEAD names a branch without commits, a [`GixError`] when
+/// HEAD cannot be resolved or the walker thread cannot be started. Failures while reading individual commits are yielded by
 /// the returned stream.
 pub fn log(opened: Arc<OpenRepository>, limit: Option<usize>) -> Result<CommitLog, GixError> {
-    let tip = opened.repo().head_id().map_err(GixError::Head)?.detach();
+    let repo = opened.repo();
+    let head = repo.head().map_err(GixError::Head)?;
+    if let Kind::Unborn(name) = &head.kind {
+        return Err(GixError::UnbornHead {
+            name: name.to_string(),
+        });
+    }
+    let tip = head.into_peeled_id().map_err(GixError::Head)?.detach();
     let (sender, receiver) = mpsc::sync_channel(CHANNEL_CAPACITY);
 
     thread::Builder::new()
@@ -306,7 +313,7 @@ mod tests {
                 .err()
                 .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
-            assert!(matches!(err, GixError::Head(_)), "got {err:?}");
+            assert!(matches!(err, GixError::UnbornHead { .. }), "got {err:?}");
 
             Ok(())
         }

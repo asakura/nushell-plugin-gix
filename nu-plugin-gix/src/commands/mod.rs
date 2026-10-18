@@ -6,4 +6,10 @@ mod input;
 mod log;
 mod open;
 
-pub use self::{error::CommandError, gix::Gix, input::handle_from, log::Log, open::Open};
+pub use self::{
+    error::CommandError,
+    gix::{CATEGORY, Gix},
+    input::{acquire_handle, flag_arg, handle_from, input_value},
+    log::Log,
+    open::Open,
+};
