@@ -53,45 +53,16 @@ impl RepositoryLocation {
 /// An opened repository shared between commands; `gix` types never leave the git side.
 #[derive(Debug)]
 pub struct OpenRepository {
-    git_dir: PathBuf,
+    location: RepositoryLocation,
     repo: gix::ThreadSafeRepository,
 }
 
 impl OpenRepository {
-    /// Opens the repository at exactly the root of `location`, without parent-directory discovery.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`GixError::RepositoryGone`] when the repository found at the root is not the one
-    /// `location` names, for example because the worktree was deleted and another repository now
-    /// sits at its path, and [`GixError::Open`] when the repository cannot be opened.
-    pub fn open(location: &RepositoryLocation) -> Result<Self, GixError> {
-        let root = location.root();
-
-        let repo = gix::open(root).map_err(|source| GixError::Open {
-            path: root.to_owned(),
-            source,
-        })?;
-
-        if !same_directory(repo.git_dir(), &location.git_dir) {
-            return Err(GixError::RepositoryGone {
-                git_dir: location.git_dir.clone(),
-            });
-        }
-
-        // Callers key the registry by the location's git directory, so it is kept as given
-        // rather than re-derived from the opened repository.
-        Ok(Self {
-            git_dir: location.git_dir.clone(),
-            repo: repo.into_sync(),
-        })
-    }
-
     /// Wraps an already opened repository, taking its git directory from the repository itself.
     #[must_use = "the handle is the only way to read the repository"]
     pub(crate) fn from_repository(repo: gix::Repository) -> Self {
         Self {
-            git_dir: repo.git_dir().to_owned(),
+            location: RepositoryLocation::from_repository(&repo),
             repo: repo.into_sync(),
         }
     }
@@ -121,21 +92,61 @@ impl OpenRepository {
             }
         })?;
 
-        let location = RepositoryLocation::from_repository(&repo);
+        let opened = Self::from_repository(repo);
+        let location = RepositoryLocation::from(&opened);
 
-        Ok((Self::from_repository(repo), location))
+        Ok((opened, location))
     }
 
     /// The git directory this handle was opened from.
     #[must_use = "returns the git directory; ignoring it does nothing"]
     pub(crate) fn git_dir(&self) -> &Path {
-        &self.git_dir
+        &self.location.git_dir
     }
 
     /// A repository handle for the calling thread.
     #[must_use = "the handle is the only way to read the repository"]
     pub(crate) fn repo(&self) -> gix::Repository {
         self.repo.to_thread_local()
+    }
+}
+
+impl From<&OpenRepository> for RepositoryLocation {
+    fn from(opened: &OpenRepository) -> Self {
+        opened.location.clone()
+    }
+}
+
+impl TryFrom<&RepositoryLocation> for OpenRepository {
+    type Error = GixError;
+
+    /// Opens the repository at exactly the root of `location`, without parent-directory discovery.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GixError::RepositoryGone`] when the repository found at the root is not the one
+    /// `location` names, for example because the worktree was deleted and another repository now
+    /// sits at its path, and [`GixError::Open`] when the repository cannot be opened.
+    fn try_from(location: &RepositoryLocation) -> Result<Self, Self::Error> {
+        let root = location.root();
+
+        let repo = gix::open(root).map_err(|source| GixError::Open {
+            path: root.to_owned(),
+            source,
+        })?;
+
+        if !same_directory(repo.git_dir(), &location.git_dir) {
+            return Err(GixError::RepositoryGone {
+                git_dir: location.git_dir.clone(),
+            });
+        }
+
+        // Callers key the registry by the location's git directory, so the location is kept as
+        // given rather than re-derived from the opened repository.
+        Ok(Self {
+            location: location.clone(),
+            repo: repo.into_sync(),
+        })
     }
 }
 
@@ -356,7 +367,7 @@ mod tests {
             ) -> Result<(), TestError> {
                 let dir = unborn_repo?.dir;
                 let location = RepositoryLocation::discover(dir.path())?;
-                let opened = OpenRepository::open(&location)?;
+                let opened = OpenRepository::try_from(&location)?;
 
                 assert_eq!(opened.git_dir(), location.git_dir);
 
@@ -377,7 +388,7 @@ mod tests {
                     worktree: Some(other.path().to_owned()),
                 };
 
-                let err = OpenRepository::open(&location)
+                let err = OpenRepository::try_from(&location)
                     .err()
                     .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
@@ -396,7 +407,7 @@ mod tests {
                 assert_eq!(location.worktree, None);
                 assert_eq!(location.root(), location.git_dir);
 
-                let opened = OpenRepository::open(&location)?;
+                let opened = OpenRepository::try_from(&location)?;
 
                 assert_eq!(opened.git_dir(), location.git_dir);
 
@@ -415,7 +426,7 @@ mod tests {
                     worktree: Some(missing),
                 };
 
-                let err = OpenRepository::open(&location)
+                let err = OpenRepository::try_from(&location)
                     .err()
                     .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
@@ -435,7 +446,7 @@ mod tests {
                     worktree: Some(dir.path().to_owned()),
                 };
 
-                let err = OpenRepository::open(&location)
+                let err = OpenRepository::try_from(&location)
                     .err()
                     .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
@@ -460,7 +471,7 @@ mod tests {
                     worktree: Some(child),
                 };
 
-                let err = OpenRepository::open(&location)
+                let err = OpenRepository::try_from(&location)
                     .err()
                     .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 

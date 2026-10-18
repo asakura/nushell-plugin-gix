@@ -57,7 +57,7 @@ impl Registry {
     ///
     /// Returns [`GixError::Open`] when the repository cannot be opened.
     pub fn register(&self, location: &RepositoryLocation) -> Result<u64, GixError> {
-        Ok(self.cache(OpenRepository::open(location)?))
+        Ok(self.cache(OpenRepository::try_from(location)?))
     }
 
     /// Discovers the repository containing `path`, caches the repository that discovery opened,
@@ -105,7 +105,7 @@ impl Registry {
             return Ok(opened);
         }
 
-        let opened = Arc::new(OpenRepository::open(location)?);
+        let opened = Arc::new(OpenRepository::try_from(location)?);
 
         self.insert(id, Arc::clone(&opened));
 
