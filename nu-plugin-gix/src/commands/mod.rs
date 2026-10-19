@@ -14,7 +14,7 @@ pub use self::{
     gix::{CATEGORY, Gix, help_call},
     input::{acquire_handle, argument_span, flag_arg, handle_from, input_value, positional_arg},
     log::Log,
-    oid::require_full_oid,
+    oid::{is_full_oid, is_hexadecimal, require_full_oid},
     open::Open,
     refs::{Ref, RefHead, RefList, RefSet},
     rev::Rev,

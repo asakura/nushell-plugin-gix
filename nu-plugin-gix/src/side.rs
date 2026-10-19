@@ -20,6 +20,7 @@
 //! tree, while explicit paths remain available for operations that need ignored files.
 
 use crate::commands::CommandError;
+use crate::commands::{is_full_oid, is_hexadecimal};
 
 use nu_protocol::{Value, record};
 
@@ -28,12 +29,6 @@ const HEAD_UPPER: &str = "HEAD";
 const INDEX: &str = "index";
 const REV_FIELD: &str = "rev";
 const WORKTREE: &str = "worktree";
-
-/// Number of hexadecimal characters in a full SHA-1 object id.
-const SHA1_HEX_LEN: usize = 40;
-
-/// Number of hexadecimal characters in a full SHA-256 object id.
-const SHA256_HEX_LEN: usize = 64;
 
 /// A syntactically valid side before the core layer resolves its revision expression.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,7 +111,7 @@ fn parse_revision(value: &str, span: nu_protocol::Span) -> Result<SideArg, Comma
         return Err(CommandError::EmptyRevision { span });
     }
 
-    if is_object_id_length(value) && !value.bytes().all(is_hexadecimal) {
+    if is_full_oid(value) && !value.bytes().all(is_hexadecimal) {
         return Err(CommandError::InvalidObjectId {
             expression: value.to_owned(),
             span,
@@ -126,22 +121,14 @@ fn parse_revision(value: &str, span: nu_protocol::Span) -> Result<SideArg, Comma
     Ok(SideArg::Rev(value.to_owned()))
 }
 
-/// Returns whether `value` has the length of a full SHA-1 or SHA-256 hexadecimal digest.
-const fn is_object_id_length(value: &str) -> bool {
-    value.len() == SHA1_HEX_LEN || value.len() == SHA256_HEX_LEN
-}
-
-/// Returns whether `byte` is an ASCII hexadecimal digit, in either case.
-const fn is_hexadecimal(byte: u8) -> bool {
-    byte.is_ascii_hexdigit()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use nu_protocol::{Span, Value, record};
     use rstest::rstest;
+
+    use std::assert_matches;
 
     fn span(start: usize) -> Span {
         Span::new(start, start.saturating_add(1))
@@ -175,14 +162,14 @@ mod tests {
             let value = Value::string("head", span(1));
             let result = SideArg::try_from(&value);
 
-            assert!(matches!(result, Ok(SideArg::Head)));
+            assert_matches!(result, Ok(SideArg::Head));
         }
 
         #[rstest]
         fn converts_an_owned_value_through_try_from() {
             let result = SideArg::try_from(Value::string("index", span(1)));
 
-            assert!(matches!(result, Ok(SideArg::Index)));
+            assert_matches!(result, Ok(SideArg::Index));
         }
 
         #[rstest]
@@ -195,7 +182,7 @@ mod tests {
         fn parses_strings(#[case] input: &str, #[case] expected: SideArg) {
             let found = SideArg::try_from(&Value::string(input, span(1)));
 
-            assert!(matches!(found, Ok(actual) if actual == expected));
+            assert_matches!(found, Ok(actual) if actual == expected);
         }
 
         #[rstest]
@@ -206,7 +193,7 @@ mod tests {
         fn accepts_object_ids_and_their_hex_shortcuts(#[case] input: &str) {
             let found = SideArg::try_from(&Value::string(input, span(1)));
 
-            assert!(matches!(found, Ok(SideArg::Rev(revision)) if revision == input));
+            assert_matches!(found, Ok(SideArg::Rev(revision)) if revision == input);
         }
 
         #[rstest]
@@ -216,9 +203,7 @@ mod tests {
             let input_span = span(41);
             let err = SideArg::try_from(&Value::string(input, input_span));
 
-            assert!(
-                matches!(err, Err(CommandError::InvalidObjectId { span: found, .. }) if found == input_span)
-            );
+            assert_matches!(err, Err(CommandError::InvalidObjectId { span: found, .. }) if found == input_span);
         }
 
         #[rstest]
@@ -228,9 +213,7 @@ mod tests {
                 span(3),
             );
 
-            assert!(
-                matches!(SideArg::try_from(&input), Ok(SideArg::Rev(revision)) if revision == "refs/heads/main")
-            );
+            assert_matches!(SideArg::try_from(&input), Ok(SideArg::Rev(revision)) if revision == "refs/heads/main");
         }
 
         #[rstest]
@@ -242,9 +225,7 @@ mod tests {
             );
             let err = SideArg::try_from(&input);
 
-            assert!(
-                matches!(err, Err(CommandError::InvalidObjectId { span: found, .. }) if found == field_span)
-            );
+            assert_matches!(err, Err(CommandError::InvalidObjectId { span: found, .. }) if found == field_span);
         }
 
         #[rstest]
@@ -254,9 +235,7 @@ mod tests {
             let input_span = span(11);
             let err = SideArg::try_from(&Value::string(input, input_span));
 
-            assert!(
-                matches!(err, Err(CommandError::EmptyRevision { span: found }) if found == input_span)
-            );
+            assert_matches!(err, Err(CommandError::EmptyRevision { span: found }) if found == input_span);
         }
 
         #[rstest]
@@ -268,9 +247,7 @@ mod tests {
             );
             let err = SideArg::try_from(&input);
 
-            assert!(
-                matches!(err, Err(CommandError::EmptyRevision { span: found }) if found == field_span)
-            );
+            assert_matches!(err, Err(CommandError::EmptyRevision { span: found }) if found == field_span);
         }
 
         #[rstest]
@@ -284,9 +261,7 @@ mod tests {
             let record_span = span(23);
             let err = SideArg::try_from(&Value::record(record, record_span));
 
-            assert!(
-                matches!(err, Err(CommandError::InvalidSideRecord { span: found }) if found == record_span)
-            );
+            assert_matches!(err, Err(CommandError::InvalidSideRecord { span: found }) if found == record_span);
         }
 
         #[rstest]
@@ -298,9 +273,7 @@ mod tests {
             let input_span = input.span();
             let err = SideArg::try_from(&input);
 
-            assert!(
-                matches!(err, Err(CommandError::InvalidSideType { got: found, span }) if found == got && span == input_span)
-            );
+            assert_matches!(err, Err(CommandError::InvalidSideType { got: found, span }) if found == got && span == input_span);
         }
 
         #[rstest]
@@ -309,9 +282,7 @@ mod tests {
             let input = Value::record(record! { REV_FIELD => Value::int(3, field_span) }, span(3));
             let err = SideArg::try_from(&input);
 
-            assert!(
-                matches!(err, Err(CommandError::InvalidSideField { field: REV_FIELD, got, span: found }) if got == "int" && found == field_span)
-            );
+            assert_matches!(err, Err(CommandError::InvalidSideField { field: REV_FIELD, got, span: found }) if got == "int" && found == field_span);
         }
     }
 }
