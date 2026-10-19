@@ -55,9 +55,10 @@ impl Iterator for CommitLog {
 ///
 /// # Errors
 ///
-/// Returns [`GixError::UnbornHead`] when HEAD names a branch without commits, a [`GixError`] when
-/// HEAD cannot be resolved or the walker thread cannot be started. Failures while reading individual commits are yielded by
-/// the returned stream.
+/// Returns [`GixError::UnbornHead`] when HEAD names a branch without commits,
+/// [`GixError::Head`] when HEAD cannot be resolved to an object, and another [`GixError`] when
+/// the walker thread cannot be started. Failures while reading individual commits are yielded
+/// by the returned stream.
 pub fn log(opened: Arc<OpenRepository>, limit: Option<usize>) -> Result<CommitLog, GixError> {
     let repo = opened.repo();
     let head = repo.head().map_err(GixError::Head)?;
@@ -149,11 +150,17 @@ mod tests {
 
     use crate::{Registry, RepositoryLocation};
 
-    use gix::actor::SignatureRef;
+    use gix::objs::Tree;
+    use nu_plugin_gix_testing_support::{
+        COMMITTER_EMAIL, COMMITTER_NAME, COMMITTER_TIME, FIRST_COMMIT_MESSAGE,
+        FORK_FIRST_PARENT_MESSAGE, FORK_MERGE_MESSAGE, FORK_ROOT_MESSAGE,
+        FORK_SECOND_PARENT_MESSAGE, FixtureError, ForkedTestRepo, MAIN_BRANCH, UnbornTestRepo,
+        committer, forked_repo, unborn_repo,
+    };
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
-    use std::{io, path::Path};
+    use std::{assert_matches, io, path::Path};
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {
@@ -166,13 +173,16 @@ mod tests {
         #[error(transparent)]
         Git(#[from] GixError),
 
+        #[error(transparent)]
+        Fixture(#[from] FixtureError),
+
         #[error("Test failure: {0}")]
         Failure(String),
     }
 
     /// `(message, raw git timestamp)` pairs, oldest first.
     const HISTORY: [(&str, &str); 3] = [
-        ("first", "1700000000 +0000"),
+        (FIRST_COMMIT_MESSAGE, COMMITTER_TIME),
         ("second\n\nbody text", "1700000060 +0200"),
         ("third", "1700000120 -0500"),
     ];
@@ -180,15 +190,12 @@ mod tests {
     /// Initialises a repository in `dir` with one empty-tree commit per entry of `history`.
     fn init_with_history(dir: &Path, history: &[(&str, &str)]) -> Result<(), TestError> {
         let repo = gix::init(dir)?;
-        let tree = repo.empty_tree().id;
+        // `empty_tree()` is virtual and never reaches the object database, so write it once.
+        let tree = repo.write_object(Tree::empty())?.detach();
         let mut parents = Vec::new();
 
         for (message, time) in history {
-            let signature = SignatureRef {
-                name: "Ada".into(),
-                email: "ada@example.com".into(),
-                time,
-            };
+            let signature = committer(time);
 
             let id = repo.commit_as(
                 signature,
@@ -253,8 +260,8 @@ mod tests {
                 .ok_or_else(|| TestError::Failure("missing second commit".to_owned()))?;
 
             assert_eq!(second.id.len(), 40);
-            assert_eq!(second.author, "Ada");
-            assert_eq!(second.email, "ada@example.com");
+            assert_eq!(second.author, COMMITTER_NAME);
+            assert_eq!(second.email, COMMITTER_EMAIL);
 
             assert_eq!(
                 second.time.to_rfc3339(), // 1_700_000_060 s = 2023-11-14T22:14:20Z, shifted by +02:00
@@ -269,6 +276,7 @@ mod tests {
         #[case::one(1, 1)]
         #[case::exact(3, 3)]
         #[case::more_than_history(10, 3)]
+        #[case::usize_max(usize::MAX, 3)]
         fn respects_limit(
             dir: Result<TempDir, TestError>,
             #[case] limit: usize,
@@ -302,18 +310,110 @@ mod tests {
         }
 
         #[rstest]
-        fn fails_on_repository_without_commits(
+        fn reports_unborn_head_for_repository_without_commits(
+            unborn_repo: Result<UnbornTestRepo, FixtureError>,
+        ) -> Result<(), TestError> {
+            let repo = unborn_repo?;
+
+            let err = log(opened_at(repo.path())?, None)
+                .err()
+                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+            assert_matches!(
+                &err,
+                GixError::UnbornHead { name } if name == MAIN_BRANCH,
+                "got {err:?}"
+            );
+
+            Ok(())
+        }
+
+        /// The limit that keeps the two newest commits of `forked_repo`.
+        const CAPPED_FORK_LIMIT: usize = 2;
+        /// The merge of `forked_repo`: its author time is 1700000300 in a `-05:00` offset.
+        const MERGE_TIME: &str = "2023-11-14T17:18:20-05:00";
+        /// The root of `forked_repo`, which is UTC.
+        const ROOT_TIME: &str = "2023-11-14T22:13:20+00:00";
+
+        #[rstest]
+        fn lists_forked_history_by_commit_time_not_first_parent(
+            forked_repo: Result<ForkedTestRepo, FixtureError>,
+        ) -> Result<(), TestError> {
+            let repo = forked_repo?;
+            let summaries: Vec<String> = collect(repo.path(), None)?
+                .into_iter()
+                .map(|commit| commit.summary)
+                .collect();
+
+            assert_eq!(
+                summaries,
+                [
+                    FORK_MERGE_MESSAGE,
+                    FORK_SECOND_PARENT_MESSAGE,
+                    FORK_FIRST_PARENT_MESSAGE,
+                    FORK_ROOT_MESSAGE,
+                ]
+            );
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn keeps_the_newest_commits_by_time_when_capped(
+            forked_repo: Result<ForkedTestRepo, FixtureError>,
+        ) -> Result<(), TestError> {
+            let repo = forked_repo?;
+            let summaries: Vec<String> = collect(repo.path(), Some(CAPPED_FORK_LIMIT))?
+                .into_iter()
+                .map(|commit| commit.summary)
+                .collect();
+
+            assert_eq!(summaries, [FORK_MERGE_MESSAGE, FORK_SECOND_PARENT_MESSAGE]);
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn carries_each_commit_time_with_its_own_offset(
+            forked_repo: Result<ForkedTestRepo, FixtureError>,
+        ) -> Result<(), TestError> {
+            let repo = forked_repo?;
+            let commits = collect(repo.path(), None)?;
+            let merge = commits
+                .first()
+                .ok_or_else(|| TestError::Failure("missing merge commit".to_owned()))?;
+            let root = commits
+                .last()
+                .ok_or_else(|| TestError::Failure("missing root commit".to_owned()))?;
+
+            assert_eq!(merge.time.to_rfc3339(), MERGE_TIME);
+            assert_eq!(root.time.to_rfc3339(), ROOT_TIME);
+
+            Ok(())
+        }
+    }
+
+    mod fixture {
+        use super::*;
+
+        const ABBREVIATED_LEN: usize = 7;
+
+        #[rstest]
+        fn commit_tree_resolves_by_abbreviated_id(
             dir: Result<TempDir, TestError>,
         ) -> Result<(), TestError> {
             let dir = dir?;
 
-            init_with_history(dir.path(), &[])?;
+            init_with_history(dir.path(), &HISTORY)?;
 
-            let err = log(opened_at(dir.path())?, None)
-                .err()
-                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+            let repo = gix::open(dir.path())?;
+            let tree_id = repo.head_commit()?.tree_id()?.detach();
+            let tree_hex = tree_id.to_string();
+            let abbreviated = tree_hex
+                .get(..ABBREVIATED_LEN)
+                .ok_or_else(|| TestError::Failure("tree id shorter than the prefix".to_owned()))?;
 
-            assert!(matches!(err, GixError::UnbornHead { .. }), "got {err:?}");
+            assert_eq!(repo.rev_parse_single(abbreviated)?.detach(), tree_id);
 
             Ok(())
         }

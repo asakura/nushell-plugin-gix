@@ -173,25 +173,34 @@ mod tests {
 
     use miette::Diagnostic as _;
     use nu_plugin_gix_testing_support::{
-        COMMITTER_EMAIL, COMMITTER_NAME, FIRST_COMMIT_MESSAGE, FORK_FIRST_PARENT_MESSAGE,
-        FORK_MERGE_MESSAGE, FORK_ROOT_MESSAGE, FORK_SECOND_PARENT_MESSAGE, FixtureError,
-        ForkedTestRepo, HEAD_FILE, SECOND_COMMIT_MESSAGE, TestRepo, UnbornTestRepo, forked_repo,
-        test_repo, unborn_repo,
+        AssertionError, FixtureError, HEAD_FILE, TestRepo, UnbornTestRepo, assert_label_in_script,
+        eval_value, first_row, raised_labeled, record_column, test_repo, unborn_repo,
     };
     use nu_plugin_test_support::PluginTest;
     use rstest::rstest;
 
-    use std::{assert_matches, fs, io, path::Path};
+    use std::{assert_matches, fs, io};
 
-    const HISTORY_COMMITS: usize = 2;
-    const EXPECTED_ROW: &str = "expected a commit row";
     const EXPECTED_ERROR: &str = "expected an error";
     const NEGATIVE_LIMIT: i64 = -1;
     const NEGATIVE_LIMIT_CODE: &str = "gix::negative-limit";
+    const NEGATIVE_LIMIT_SCRIPT: &str = "gix log --limit -1";
+    const LIMIT_SCRIPT: &str = "gix log --limit 1";
+    const LIMITED_ROW_COUNT: usize = 1;
     const UNBORN_HEAD_CODE: &str = "gix::unborn-head";
     const BAD_TIMESTAMP_CODE: &str = "gix::bad-timestamp";
+    const BAD_TIMESTAMP_ID: &str = "abc";
+    const LIMIT_SHORT_FLAG: char = 'n';
     const LIMIT_VALUE_SPAN: Span = Span { start: 10, end: 12 };
     const ERROR_SPAN: Span = Span { start: 40, end: 47 };
+    const HANDLE_SPAN: Span = Span { start: 21, end: 27 };
+    const ROW_COLUMNS: [&str; 5] = [
+        HASH_COLUMN,
+        AUTHOR_COLUMN,
+        EMAIL_COLUMN,
+        DATE_COLUMN,
+        SUMMARY_COLUMN,
+    ];
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {
@@ -199,13 +208,13 @@ mod tests {
         Shell(#[from] Box<ShellError>),
 
         #[error(transparent)]
+        Assertion(#[from] AssertionError),
+
+        #[error(transparent)]
         Fixture(#[from] FixtureError),
 
         #[error(transparent)]
         Input(#[from] RepoInputError),
-
-        #[error(transparent)]
-        Command(#[from] Box<CommandError>),
 
         #[error(transparent)]
         Git(#[from] GixError),
@@ -223,245 +232,51 @@ mod tests {
         }
     }
 
-    impl From<CommandError> for TestError {
-        fn from(error: CommandError) -> Self {
-            Self::Command(Box::new(error))
+    mod signature {
+        use super::*;
+
+        #[rstest]
+        fn declares_the_name_limit_flag_and_repository_input() {
+            let signature = Log.signature();
+            let limit_short = signature
+                .get_long_flag(LIMIT_FLAG)
+                .and_then(|flag| flag.short);
+
+            assert_eq!(signature.name, COMMAND_NAME);
+            assert_eq!(limit_short, Some(LIMIT_SHORT_FLAG));
+            assert!(
+                signature.input_output_types.contains(&(
+                    Type::Custom(<Repository as Handle>::TYPE_NAME.into()),
+                    Type::table(),
+                )),
+                "got {:?}",
+                signature.input_output_types
+            );
         }
     }
 
-    /// The value of one row column.
-    fn field<'row>(row: &'row Value, name: &str) -> Result<&'row Value, TestError> {
-        row.as_record()?
-            .get(name)
-            .ok_or_else(|| TestError::Failure(format!("row lacks a `{name}` column")))
-    }
-
-    /// The string value of one row column.
-    fn column<'row>(row: &'row Value, name: &str) -> Result<&'row str, TestError> {
-        Ok(field(row, name)?.as_str()?)
-    }
-
-    /// The string values of one column across `rows`, in row order.
-    fn column_values<'row>(rows: &'row [Value], name: &str) -> Result<Vec<&'row str>, TestError> {
-        rows.iter().map(|row| column(row, name)).collect()
-    }
-
-    /// The RFC 3339 rendering of the date column of `row`, which keeps the commit's own offset.
-    fn date_of(row: &Value) -> Result<String, TestError> {
-        Ok(field(row, DATE_COLUMN)?.as_date()?.to_rfc3339())
-    }
-
-    /// The error inside an error value, or a failure when `value` is not one.
-    fn error_of(value: &Value) -> Result<&ShellError, TestError> {
-        let Value::Error { error, .. } = value else {
-            return Err(TestError::Failure(format!(
-                "expected an error value, got {value:?}"
-            )));
-        };
-
-        Ok(error.as_ref())
-    }
-
-    /// End-to-end behavior of `gix log` evaluated through `PluginTest`.
     mod log {
         use super::*;
 
-        const ABOVE_HISTORY_LIMIT: i64 = 25;
-        const SINGLE_COMMIT_LIMIT: i64 = 1;
-        const CAPPED_FORK_LIMIT: i64 = 2;
-        const NEGATIVE_LIMIT_MESSAGE: &str = "limit must not be negative, got -1";
-        const NEGATIVE_LIMIT_LABEL: &str = "expected a non-negative integer";
-        /// The `-1` of `gix log --limit -1`, as byte offsets into that script.
-        const NEGATIVE_LIMIT_SPAN: Span = Span { start: 16, end: 18 };
-        const SHORT_LIMIT_FLAG: &str = "-n";
-        const NON_HANDLE_SCRIPT: &str = "1 | gix log";
-        const INPUT_TYPE_MISMATCH_CODE: &str = "nu::parser::input_type_mismatch";
-        /// The root of `forked_repo`, which carries the two-commit fixture's committer time in UTC.
-        const ROOT_DATE: &str = "2023-11-14T22:13:20+00:00";
-        /// The merge of `forked_repo`, whose author time is 1700000300 in a `-05:00` offset.
-        const MERGE_DATE: &str = "2023-11-14T17:18:20-05:00";
-        const ROW_COLUMNS: [&str; 5] = [
-            HASH_COLUMN,
-            AUTHOR_COLUMN,
-            EMAIL_COLUMN,
-            DATE_COLUMN,
-            SUMMARY_COLUMN,
-        ];
-
-        fn log_script(limit: Option<i64>) -> String {
-            limit.map_or_else(
-                || COMMAND_NAME.to_owned(),
-                |limit| format!("{COMMAND_NAME} --{LIMIT_FLAG} {limit}"),
-            )
-        }
-
-        fn eval_table(
-            plugin: &mut PluginTest,
-            script: &str,
-            repo: &Path,
-        ) -> Result<Value, TestError> {
-            let result = plugin
-                .eval_with(script, repo_input(repo)?)?
-                .into_value(Span::test_data())?;
-
-            Ok(result)
-        }
-
-        /// The only row of a single-row table, or a failure naming the expectation.
-        fn single_row<'row>(
-            table: &'row Value,
-            expectation: &str,
-        ) -> Result<&'row Value, TestError> {
-            table
-                .as_list()?
-                .first()
-                .ok_or_else(|| TestError::Failure(expectation.into()))
-        }
-
-        /// The last row of a table, which is the oldest commit of the history.
-        fn oldest_row<'table>(
-            table: &'table Value,
-            expectation: &str,
-        ) -> Result<&'table Value, TestError> {
-            table
-                .as_list()?
-                .last()
-                .ok_or_else(|| TestError::Failure(expectation.into()))
-        }
-
-        /// The error that `gix log --limit -1` raises, or a failure when the negative limit is accepted.
-        fn negative_limit_error(
-            plugin: &mut PluginTest,
-            repo: &TestRepo,
-        ) -> Result<ShellError, TestError> {
-            let error = plugin
-                .eval_with(&log_script(Some(NEGATIVE_LIMIT)), repo_input(repo.path())?)
-                .err()
-                .ok_or_else(|| {
-                    TestError::Failure("expected `gix log --limit -1` to be rejected".into())
-                })?;
-
-            Ok(error)
-        }
-
-        mod all_commits {
+        mod rows {
             use super::*;
 
             #[rstest]
-            fn maps_each_commit_to_a_row(
+            fn expose_the_documented_columns_with_a_date(
                 plugin_test: Result<PluginTest, FixtureError>,
                 test_repo: Result<TestRepo, FixtureError>,
             ) -> Result<(), TestError> {
                 let mut plugin = plugin_test?;
-
                 let repo = test_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
-                let rows = table.as_list()?;
-                let newest = single_row(&table, EXPECTED_ROW)?;
 
-                assert_eq!(
-                    column_values(rows, HASH_COLUMN)?,
-                    [repo.head.as_str(), repo.parent.as_str()]
-                );
-                assert_eq!(
-                    column_values(rows, SUMMARY_COLUMN)?,
-                    [SECOND_COMMIT_MESSAGE, FIRST_COMMIT_MESSAGE]
-                );
-                assert_eq!(column(newest, AUTHOR_COLUMN)?, COMMITTER_NAME);
-                assert_eq!(column(newest, EMAIL_COLUMN)?, COMMITTER_EMAIL);
+                let table = eval_value(&mut plugin, COMMAND_NAME, repo_input(repo.path())?)?;
+                let row = first_row(&table)?;
+                let record = row.as_record()?;
+                let columns: Vec<&str> = record.columns().map(String::as_str).collect();
+                let date = record_column(row, DATE_COLUMN)?;
 
-                Ok(())
-            }
-        }
-
-        mod oldest_row {
-            use super::*;
-
-            #[rstest]
-            fn carries_the_first_commit(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
-                let oldest = oldest_row(&table, EXPECTED_ROW)?;
-
-                assert_eq!(column(oldest, AUTHOR_COLUMN)?, COMMITTER_NAME);
-                assert_eq!(column(oldest, EMAIL_COLUMN)?, COMMITTER_EMAIL);
-                assert_eq!(column(oldest, SUMMARY_COLUMN)?, FIRST_COMMIT_MESSAGE);
-
-                Ok(())
-            }
-        }
-
-        mod date {
-            use super::*;
-
-            #[rstest]
-            fn carries_each_commit_time_as_a_date_with_its_offset(
-                plugin_test: Result<PluginTest, FixtureError>,
-                forked_repo: Result<ForkedTestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = forked_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
-                let newest = single_row(&table, EXPECTED_ROW)?;
-                let oldest = oldest_row(&table, EXPECTED_ROW)?;
-
-                assert_matches!(field(newest, DATE_COLUMN)?, Value::Date { .. });
-                assert_eq!(date_of(newest)?, MERGE_DATE);
-                assert_eq!(date_of(oldest)?, ROOT_DATE);
-
-                Ok(())
-            }
-        }
-
-        mod order {
-            use super::*;
-
-            #[rstest]
-            fn lists_commits_by_commit_time_not_first_parent(
-                plugin_test: Result<PluginTest, FixtureError>,
-                forked_repo: Result<ForkedTestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = forked_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
-
-                assert_eq!(
-                    column_values(table.as_list()?, SUMMARY_COLUMN)?,
-                    [
-                        FORK_MERGE_MESSAGE,
-                        FORK_SECOND_PARENT_MESSAGE,
-                        FORK_FIRST_PARENT_MESSAGE,
-                        FORK_ROOT_MESSAGE,
-                    ]
-                );
-
-                Ok(())
-            }
-        }
-
-        mod columns {
-            use super::*;
-
-            #[rstest]
-            fn expose_the_documented_column_set(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let table = eval_table(&mut plugin, &log_script(None), repo.path())?;
-                let newest = single_row(&table, EXPECTED_ROW)?;
-                let got: Vec<&str> = newest.as_record()?.columns().map(String::as_str).collect();
-
-                assert_eq!(got, ROW_COLUMNS);
+                assert_eq!(columns, ROW_COLUMNS);
+                assert_matches!(date, Value::Date { .. });
 
                 Ok(())
             }
@@ -471,237 +286,53 @@ mod tests {
             use super::*;
 
             #[rstest]
-            #[case::zero(0, 0)]
-            #[case::above_history(ABOVE_HISTORY_LIMIT, HISTORY_COMMITS)]
-            #[case::beyond_usize(i64::MAX, HISTORY_COMMITS)]
-            fn caps_the_history_to_the_requested_rows(
-                #[case] limit: i64,
-                #[case] expected: usize,
+            fn forwards_the_flag_value_so_only_one_row_comes_back(
                 plugin_test: Result<PluginTest, FixtureError>,
                 test_repo: Result<TestRepo, FixtureError>,
             ) -> Result<(), TestError> {
                 let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let table = eval_table(&mut plugin, &log_script(Some(limit)), repo.path())?;
-
-                assert_eq!(table.as_list()?.len(), expected);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn keeps_the_newest_commit_when_capped(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
                 let repo = test_repo?;
 
-                let table = eval_table(
-                    &mut plugin,
-                    &log_script(Some(SINGLE_COMMIT_LIMIT)),
-                    repo.path(),
-                )?;
+                let table = eval_value(&mut plugin, LIMIT_SCRIPT, repo_input(repo.path())?)?;
 
-                let newest = single_row(&table, EXPECTED_ROW)?;
-
-                assert_eq!(column(newest, HASH_COLUMN)?, repo.head.as_str());
-                assert_eq!(column(newest, SUMMARY_COLUMN)?, SECOND_COMMIT_MESSAGE);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn keeps_the_commits_newest_by_time_when_capped(
-                plugin_test: Result<PluginTest, FixtureError>,
-                forked_repo: Result<ForkedTestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = forked_repo?;
-
-                let table = eval_table(
-                    &mut plugin,
-                    &log_script(Some(CAPPED_FORK_LIMIT)),
-                    repo.path(),
-                )?;
-
-                assert_eq!(
-                    column_values(table.as_list()?, SUMMARY_COLUMN)?,
-                    [FORK_MERGE_MESSAGE, FORK_SECOND_PARENT_MESSAGE]
-                );
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn accepts_the_short_limit_flag(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let script = format!("{COMMAND_NAME} {SHORT_LIMIT_FLAG} {SINGLE_COMMIT_LIMIT}");
-                let table = eval_table(&mut plugin, &script, repo.path())?;
-
-                assert_eq!(table.as_list()?.len(), 1);
+                assert_eq!(table.as_list()?.len(), LIMITED_ROW_COUNT);
 
                 Ok(())
             }
         }
 
-        mod negative_limit {
+        mod errors {
             use super::*;
 
             #[rstest]
-            fn fails_with_message(
+            fn fail_with_a_code_and_a_label_inside_the_script(
                 plugin_test: Result<PluginTest, FixtureError>,
                 test_repo: Result<TestRepo, FixtureError>,
             ) -> Result<(), TestError> {
                 let mut plugin = plugin_test?;
-
                 let repo = test_repo?;
-                let error = negative_limit_error(&mut plugin, &repo)?;
 
-                assert_eq!(error.to_string(), NEGATIVE_LIMIT_MESSAGE);
+                let labeled =
+                    raised_labeled(&mut plugin, NEGATIVE_LIMIT_SCRIPT, repo_input(repo.path())?)?;
 
-                Ok(())
-            }
-
-            #[rstest]
-            fn fails_with_stable_code(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let error = negative_limit_error(&mut plugin, &repo)?;
-                let code = error.code().map(|code| code.to_string());
-
-                assert_eq!(code.as_deref(), Some(NEGATIVE_LIMIT_CODE));
+                assert_eq!(labeled.code.as_deref(), Some(NEGATIVE_LIMIT_CODE));
+                assert_label_in_script(&labeled, NEGATIVE_LIMIT_SCRIPT)?;
 
                 Ok(())
             }
 
             #[rstest]
-            fn labels_the_value_with_its_reason(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let error = negative_limit_error(&mut plugin, &repo)?;
-
-                let ShellError::LabeledError(labeled) = &error else {
-                    return Err(TestError::Failure(format!(
-                        "expected a labeled error, got {error:?}"
-                    )));
-                };
-
-                let label = labeled
-                    .labels
-                    .first()
-                    .ok_or_else(|| TestError::Failure("expected a label".into()))?;
-
-                assert_eq!(label.text, NEGATIVE_LIMIT_LABEL);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn points_the_label_at_the_value(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let repo = test_repo?;
-                let error = negative_limit_error(&mut plugin, &repo)?;
-
-                let ShellError::LabeledError(labeled) = &error else {
-                    return Err(TestError::Failure(format!(
-                        "expected a labeled error, got {error:?}"
-                    )));
-                };
-
-                let label = labeled
-                    .labels
-                    .first()
-                    .ok_or_else(|| TestError::Failure("expected a label".into()))?;
-
-                // The engine gives the flag value the span of the whole `--limit -1` argument, so the
-                // label covers the value without starting at it.
-                assert_eq!(label.span.end, NEGATIVE_LIMIT_SPAN.end);
-
-                assert!(
-                    label.span.start <= NEGATIVE_LIMIT_SPAN.start,
-                    "label {:?} does not cover the value",
-                    label.span
-                );
-
-                Ok(())
-            }
-        }
-
-        mod non_handle_input {
-            use super::*;
-
-            #[rstest]
-            fn rejects_before_the_command_runs(
-                plugin_test: Result<PluginTest, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-
-                let err = plugin
-                    .eval(NON_HANDLE_SCRIPT)
-                    .err()
-                    .ok_or_else(|| TestError::Failure(EXPECTED_ERROR.into()))?;
-
-                let ShellError::LabeledError(outer) = &err else {
-                    return Err(TestError::Failure(format!(
-                        "expected a labeled error, got {err:?}"
-                    )));
-                };
-
-                let cause = outer
-                    .inner
-                    .first()
-                    .ok_or_else(|| TestError::Failure("expected the engine's cause".into()))?;
-
-                let code = cause.code().map(|code| code.to_string());
-
-                assert_eq!(code.as_deref(), Some(INPUT_TYPE_MISMATCH_CODE));
-
-                Ok(())
-            }
-        }
-
-        mod unborn_head {
-            use super::*;
-
-            #[rstest]
-            fn fails_with_stable_code(
+            fn reports_an_unborn_head_with_its_code(
                 plugin_test: Result<PluginTest, FixtureError>,
                 unborn_repo: Result<UnbornTestRepo, FixtureError>,
             ) -> Result<(), TestError> {
                 let mut plugin = plugin_test?;
-
                 let repo = unborn_repo?;
 
                 let error = plugin
-                    .eval_with(&log_script(None), repo_input(repo.path())?)
+                    .eval_with(COMMAND_NAME, repo_input(repo.path())?)
                     .err()
-                    .ok_or_else(|| {
-                        TestError::Failure(
-                            "expected `gix log` on an empty repository to fail".into(),
-                        )
-                    })?;
-
+                    .ok_or_else(|| TestError::Failure(EXPECTED_ERROR.into()))?;
                 let code = error.code().map(|code| code.to_string());
 
                 assert_eq!(code.as_deref(), Some(UNBORN_HEAD_CODE));
@@ -711,198 +342,34 @@ mod tests {
         }
     }
 
-    /// Unit tests for the stream builder, which takes the registry and handle directly, so no engine or call is involved.
-    mod run_log {
-        use super::*;
-
-        const CAPPED_LIMIT: usize = 1;
-        const HANDLE_SPAN: Span = Span { start: 21, end: 27 };
-
-        /// The handle `gix open` returns for the repository at `path`, registered in `registry`.
-        fn handle_for(registry: &Registry, path: &Path) -> Result<Repository, GixError> {
-            let (id, location) = registry.discover_and_register(path)?;
-
-            Ok(Repository::new(id, location))
-        }
-
-        /// The rows `run_log` streams for `repository`, with the test span and no signals.
-        fn log_rows(
-            registry: &Registry,
-            repository: &Repository,
-            limit: Option<usize>,
-        ) -> Result<Vec<Value>, CommandError> {
-            let stream = run_log(
-                registry,
-                repository,
-                limit,
-                Span::test_data(),
-                HANDLE_SPAN,
-                Signals::EMPTY,
-            )?;
-
-            Ok(stream.into_iter().collect())
-        }
-
-        mod history {
-            use super::*;
-
-            #[rstest]
-            fn lists_both_commits(
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let repo = test_repo?;
-                let registry = Registry::new();
-                let handle = handle_for(&registry, repo.path())?;
-                let rows = log_rows(&registry, &handle, None)?;
-
-                assert_eq!(rows.len(), HISTORY_COMMITS);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn lists_newest_commit_first(
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let repo = test_repo?;
-                let registry = Registry::new();
-                let handle = handle_for(&registry, repo.path())?;
-                let rows = log_rows(&registry, &handle, None)?;
-                let hashes = column_values(&rows, HASH_COLUMN)?;
-
-                assert_eq!(hashes, [repo.head.as_str(), repo.parent.as_str()]);
-
-                Ok(())
-            }
-        }
-
-        mod limit {
-            use super::*;
-
-            #[rstest]
-            #[case::unbounded(None, HISTORY_COMMITS)]
-            #[case::capped(Some(CAPPED_LIMIT), CAPPED_LIMIT)]
-            #[case::zero(Some(0), 0)]
-            fn caps_rows_to_the_limit(
-                #[case] limit: Option<usize>,
-                #[case] expected: usize,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let repo = test_repo?;
-                let registry = Registry::new();
-                let handle = handle_for(&registry, repo.path())?;
-
-                assert_eq!(log_rows(&registry, &handle, limit)?.len(), expected);
-
-                Ok(())
-            }
-        }
-
-        mod unborn_head {
-            use super::*;
-
-            #[rstest]
-            fn reports_unborn_head_as_git_error(
-                unborn_repo: Result<UnbornTestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let repo = unborn_repo?;
-                let registry = Registry::new();
-                let handle = handle_for(&registry, repo.path())?;
-
-                let err = log_rows(&registry, &handle, None).err().ok_or_else(|| {
-                    TestError::Failure("expected an unborn HEAD to be rejected".into())
-                })?;
-
-                assert_matches!(
-                    &err,
-                    CommandError::Git(GixError::UnbornHead { .. }),
-                    "got {err:?}"
-                );
-
-                Ok(())
-            }
-        }
-
-        mod repository_gone {
-            use super::*;
-
-            #[rstest]
-            fn reports_repository_gone_at_the_handle_span(
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let repo = test_repo?;
-                let registry = Registry::new();
-                let handle = handle_for(&registry, repo.path())?;
-
-                fs::remove_dir_all(repo.path())?;
-
-                let err = log_rows(&registry, &handle, None).err().ok_or_else(|| {
-                    TestError::Failure("expected a deleted repository to be rejected".into())
-                })?;
-
-                assert_matches!(
-                    &err,
-                    CommandError::HandleRepositoryGone { span, .. } if *span == HANDLE_SPAN,
-                    "got {err:?}"
-                );
-
-                Ok(())
-            }
-        }
-
-        mod unopenable_rebuild {
-            use super::*;
-
-            #[rstest]
-            fn reports_a_failed_rebuild_as_open_failure_at_the_handle(
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let repo = test_repo?;
-                let handle = handle_for(&Registry::new(), repo.path())?;
-
-                // A fresh registry must rebuild the repository, which fails without its HEAD file.
-                fs::remove_file(handle.git_dir.join(HEAD_FILE))?;
-
-                let err = log_rows(&Registry::new(), &handle, None)
-                    .err()
-                    .ok_or_else(|| {
-                        TestError::Failure(
-                            "expected a repository that cannot be rebuilt to be rejected".into(),
-                        )
-                    })?;
-
-                assert_matches!(
-                    &err,
-                    CommandError::HandleOpenFailed { span, .. } if *span == HANDLE_SPAN,
-                    "got {err:?}"
-                );
-
-                Ok(())
-            }
-        }
-    }
-
-    /// Unit tests for the limit conversion: non-negative values pass through unchanged, and a
-    /// negative value is rejected at its own span.
-    mod parse_limit {
+    mod commit_value {
         use super::*;
 
         #[rstest]
-        #[case::zero(0, 0)]
-        #[case::typical(1, 1)]
-        fn accepts_non_negative_limits(
-            #[case] item: i64,
-            #[case] expected: usize,
-        ) -> Result<(), TestError> {
-            let limit = Spanned {
-                item,
-                span: Span::test_data(),
-            };
+        fn turns_a_bad_timestamp_into_an_error_value_with_code_span_and_message()
+        -> Result<(), TestError> {
+            let commit = Err(GixError::Timestamp {
+                id: BAD_TIMESTAMP_ID.to_owned(),
+            });
+            let value = commit_value(commit, ERROR_SPAN);
 
-            assert_eq!(parse_limit(limit)?, expected);
+            let Value::Error { error, .. } = &value else {
+                return Err(TestError::Failure(format!(
+                    "expected an error value, got {value:?}"
+                )));
+            };
+            let code = error.code().map(|code| code.to_string());
+
+            assert_eq!(code.as_deref(), Some(BAD_TIMESTAMP_CODE));
+            assert_eq!(value.span(), ERROR_SPAN);
+            assert!(!error.to_string().is_empty(), "the error has no message");
 
             Ok(())
         }
+    }
+
+    mod parse_limit {
+        use super::*;
 
         #[rstest]
         fn rejects_a_negative_limit_at_its_value() -> Result<(), TestError> {
@@ -925,43 +392,69 @@ mod tests {
         }
     }
 
-    /// Unit tests for mapping streamed commit results to values; a synthetic git-layer
-    /// error cannot be produced through the command surface, so it stays a unit test.
-    mod commit_value {
+    mod run_log {
         use super::*;
 
-        const UNREADABLE_COMMIT_ID: &str = "abc";
-        const BAD_TIMESTAMP_MESSAGE: &str = "commit abc has an out-of-range timestamp";
+        /// The handle failure `run_log` reports for a broken repository.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum HandleFailure {
+            RepositoryGone,
+            OpenFailed,
+        }
 
-        /// A commit whose timestamp cannot be represented, as the git layer reports it.
-        fn unreadable_commit() -> GixError {
-            GixError::Timestamp {
-                id: UNREADABLE_COMMIT_ID.to_owned(),
-            }
+        /// How a test breaks the repository behind a handle.
+        #[derive(Clone, Copy, Debug)]
+        enum Breakage {
+            /// Deletes the repository while the registry still caches it.
+            RemoveRepository,
+            /// Deletes HEAD, so a fresh registry cannot rebuild the repository.
+            RemoveHead,
         }
 
         #[rstest]
-        fn turns_a_bad_timestamp_into_an_error_value_with_its_code() -> Result<(), TestError> {
-            let value = commit_value(Err(unreadable_commit()), Span::test_data());
-            let code = error_of(&value)?.code().map(|code| code.to_string());
+        #[case::repository_gone(Breakage::RemoveRepository, HandleFailure::RepositoryGone)]
+        #[case::unopenable_rebuild(Breakage::RemoveHead, HandleFailure::OpenFailed)]
+        fn reports_a_broken_handle_at_the_handle_span(
+            #[case] breakage: Breakage,
+            #[case] expected: HandleFailure,
+            test_repo: Result<TestRepo, FixtureError>,
+        ) -> Result<(), TestError> {
+            let repo = test_repo?;
+            let registry = Registry::new();
+            let (id, location) = registry.discover_and_register(repo.path())?;
+            let handle = Repository::new(id, location);
 
-            assert_eq!(code.as_deref(), Some(BAD_TIMESTAMP_CODE));
+            let lookup = match breakage {
+                Breakage::RemoveRepository => {
+                    fs::remove_dir_all(repo.path())?;
+                    registry
+                }
+                Breakage::RemoveHead => {
+                    fs::remove_file(handle.git_dir.join(HEAD_FILE))?;
+                    Registry::new()
+                }
+            };
 
-            Ok(())
-        }
+            let err = run_log(
+                &lookup,
+                &handle,
+                None,
+                Span::test_data(),
+                HANDLE_SPAN,
+                Signals::EMPTY,
+            )
+            .err()
+            .ok_or_else(|| TestError::Failure(EXPECTED_ERROR.into()))?;
 
-        #[rstest]
-        fn keeps_the_span_it_is_given() {
-            let value = commit_value(Err(unreadable_commit()), ERROR_SPAN);
+            let (failure, span) = match &err {
+                CommandError::HandleRepositoryGone { span, .. } => {
+                    (HandleFailure::RepositoryGone, *span)
+                }
+                CommandError::HandleOpenFailed { span, .. } => (HandleFailure::OpenFailed, *span),
+                other => return Err(TestError::Failure(format!("got {other:?}"))),
+            };
 
-            assert_eq!(value.span(), ERROR_SPAN);
-        }
-
-        #[rstest]
-        fn carries_the_timestamp_message() -> Result<(), TestError> {
-            let value = commit_value(Err(unreadable_commit()), Span::test_data());
-
-            assert_eq!(error_of(&value)?.to_string(), BAD_TIMESTAMP_MESSAGE);
+            assert_eq!((failure, span), (expected, HANDLE_SPAN));
 
             Ok(())
         }
