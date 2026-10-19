@@ -9,6 +9,7 @@
 //! and `Spec` carries only detached object IDs, so they are plain data on this boundary.
 
 use crate::error::GixError;
+use crate::repository::OpenRepository;
 
 use gix::revision::plumbing::Spec as DetachedSpec;
 use serde::{Deserialize, Serialize};
@@ -53,16 +54,14 @@ impl Side {
         matches!(self, Self::Index | Self::Worktree)
     }
 
-    /// Resolves `expression` in `repository` and retains only its detached revision data.
+    /// Resolves `expression` in `opened` and retains only its detached revision data.
     ///
     /// # Errors
     ///
     /// Returns [`GixError::Revision`] when the revision expression cannot be resolved.
-    pub fn resolve_revision(
-        repository: &gix::Repository,
-        expression: &str,
-    ) -> Result<Self, GixError> {
-        repository
+    pub fn resolve_revision(opened: &OpenRepository, expression: &str) -> Result<Self, GixError> {
+        opened
+            .repo()
             .rev_parse(expression)
             .map_err(|source| GixError::Revision {
                 expression: expression.to_owned(),
@@ -88,11 +87,14 @@ impl fmt::Display for Side {
 mod tests {
     use super::*;
 
-    use gix::actor::SignatureRef;
+    use crate::repository::RepositoryLocation;
+
+    use gix::objs::Tree;
+    use nu_plugin_gix_testing_support::{COMMITTER_TIME, committer};
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
-    use std::io;
+    use std::{assert_matches, io};
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {
@@ -110,7 +112,6 @@ mod tests {
     }
 
     const COMMIT_MESSAGE: &str = "initial";
-    const COMMIT_TIME: &str = "1700000000 +0000";
 
     const HEX: &str = "0123456789012345678901234567890123456789";
     const OID: gix::ObjectId = gix::ObjectId::Sha1([
@@ -127,25 +128,25 @@ mod tests {
 
     /// A repository in a temporary directory with one commit on `HEAD`.
     #[fixture]
-    fn repo() -> Result<(TempDir, gix::Repository), TestError> {
+    fn repo() -> Result<(TempDir, OpenRepository), TestError> {
         let dir = TempDir::new()?;
         let repo = gix::init(dir.path())?;
-        let signature = SignatureRef {
-            name: "Ada".into(),
-            email: "ada@example.com".into(),
-            time: COMMIT_TIME,
-        };
+        let signature = committer(COMMITTER_TIME);
+        // `empty_tree()` is virtual and never reaches the object database, so write it once.
+        let tree = repo.write_object(Tree::empty())?.detach();
 
         repo.commit_as(
             signature,
             signature,
             "HEAD",
             COMMIT_MESSAGE,
-            repo.empty_tree().id,
+            tree,
             Vec::<gix::ObjectId>::new(),
         )?;
 
-        Ok((dir, repo))
+        let opened = OpenRepository::try_from(&RepositoryLocation::from_repository(&repo))?;
+
+        Ok((dir, opened))
     }
 
     mod resolved_revision {
@@ -217,31 +218,26 @@ mod tests {
 
         #[rstest]
         fn resolves_head_to_a_detached_object_id(
-            repo: Result<(TempDir, gix::Repository), TestError>,
+            repo: Result<(TempDir, OpenRepository), TestError>,
         ) -> Result<(), TestError> {
             let (_dir, repo) = repo?;
-            let head = repo.rev_parse_single("HEAD")?.detach();
+            let head = repo.repo().rev_parse_single("HEAD")?.detach();
 
             let side = Side::resolve_revision(&repo, "HEAD")?;
 
-            assert!(matches!(
-                side,
-                Side::Rev(ResolvedRevision::Include(oid)) if oid == head
-            ));
+            assert_matches!(side, Side::Rev(ResolvedRevision::Include(oid)) if oid == head);
 
             Ok(())
         }
 
         #[rstest]
         fn reports_an_unresolvable_expression(
-            repo: Result<(TempDir, gix::Repository), TestError>,
+            repo: Result<(TempDir, OpenRepository), TestError>,
         ) -> Result<(), TestError> {
             let (_dir, repo) = repo?;
             let result = Side::resolve_revision(&repo, "not-a-revision");
 
-            assert!(
-                matches!(result, Err(GixError::Revision { expression, .. }) if expression == "not-a-revision")
-            );
+            assert_matches!(result, Err(GixError::Revision { expression, .. }) if expression == "not-a-revision");
 
             Ok(())
         }
