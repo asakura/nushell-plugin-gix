@@ -236,8 +236,8 @@ mod tests {
 
     use nu_plugin_gix_core::{RepositoryLocation, RevKind};
     use nu_plugin_gix_testing_support::{
-        AssertionError, FixtureError, TestRepo, assert_label_in_script, eval_value, raised_labeled,
-        record_column, test_repo,
+        AssertionError, FixtureError, TestRepo, assert_label_in_script, eval_labeled_error,
+        eval_value, record_column, test_repo,
     };
     use nu_plugin_test_support::PluginTest;
     use nu_protocol::ShellError;
@@ -394,10 +394,10 @@ mod tests {
                 let repo = test_repo?;
                 let script = rev_script(BLANK_SPEC);
 
-                let labeled = raised_labeled(&mut plugin, &script, repo_input(repo.path())?)?;
+                let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
 
                 assert_eq!(labeled.code.as_deref(), Some(INVALID_REVISION_CODE));
-                assert_label_in_script(&labeled, &script)?;
+                assert_label_in_script!(&labeled, &script);
 
                 assert!(
                     labeled.msg.contains(EMPTY_REVISION_FACT),
@@ -417,10 +417,10 @@ mod tests {
                 let repo = test_repo?;
                 let script = rev_script(UNKNOWN_SPEC);
 
-                let labeled = raised_labeled(&mut plugin, &script, repo_input(repo.path())?)?;
+                let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
 
                 assert_eq!(labeled.code.as_deref(), Some(BAD_REVISION_CODE));
-                assert_label_in_script(&labeled, &script)?;
+                assert_label_in_script!(&labeled, &script);
 
                 assert!(
                     labeled.msg.contains(UNKNOWN_SPEC),
@@ -444,10 +444,10 @@ mod tests {
                 let repo = test_repo?;
                 let script = rev_script(&format!("{HEAD_SPEC} {SHORT_FLAG} {short_len}"));
 
-                let labeled = raised_labeled(&mut plugin, &script, repo_input(repo.path())?)?;
+                let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
 
                 assert_eq!(labeled.code.as_deref(), Some(INVALID_SHORT_LEN_CODE));
-                assert_label_in_script(&labeled, &script)?;
+                assert_label_in_script!(&labeled, &script);
 
                 assert!(
                     labeled.msg.contains(SHORT_LEN_FACT),
@@ -469,7 +469,7 @@ mod tests {
 
                 fs::remove_dir_all(repo.path())?;
 
-                let labeled = raised_labeled(&mut plugin, &rev_script(HEAD_SPEC), input)?;
+                let labeled = eval_labeled_error(&mut plugin, &rev_script(HEAD_SPEC), input)?;
 
                 assert_eq!(labeled.code.as_deref(), Some(REPOSITORY_GONE_CODE));
                 assert!(!labeled.msg.is_empty(), "the error has no message");

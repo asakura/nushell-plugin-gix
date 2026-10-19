@@ -1,6 +1,6 @@
 //! Shared test fixtures for `nushell-plugin-gix`: throwaway git repositories built with `gix`,
 //! and the in-process plugin-engine helpers (`plugin_test_for`, `custom_value_input`, `pin_pwd`)
-//! used by plugin tests, plus the script assertions (`eval_value`, `raised_labeled`, ...) that
+//! used by plugin tests, plus the script assertions (`eval_value`, `eval_labeled_error`, ...) that
 //! inspect what a script produces.
 
 use gix::actor::SignatureRef;
@@ -29,7 +29,7 @@ use std::{
 mod assertions;
 
 pub use self::assertions::{
-    AssertionError, assert_label_in_script, eval_value, first_row, raised_labeled, record_column,
+    AssertionError, eval_labeled_error, eval_value, first_row, record_column,
 };
 
 /// Name of the environment variable that holds the engine's working directory.

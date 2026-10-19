@@ -174,7 +174,7 @@ mod tests {
     use miette::Diagnostic as _;
     use nu_plugin_gix_testing_support::{
         AssertionError, FixtureError, HEAD_FILE, TestRepo, UnbornTestRepo, assert_label_in_script,
-        eval_value, first_row, raised_labeled, record_column, test_repo, unborn_repo,
+        eval_labeled_error, eval_value, first_row, record_column, test_repo, unborn_repo,
     };
     use nu_plugin_test_support::PluginTest;
     use rstest::rstest;
@@ -312,11 +312,14 @@ mod tests {
                 let mut plugin = plugin_test?;
                 let repo = test_repo?;
 
-                let labeled =
-                    raised_labeled(&mut plugin, NEGATIVE_LIMIT_SCRIPT, repo_input(repo.path())?)?;
+                let labeled = eval_labeled_error(
+                    &mut plugin,
+                    NEGATIVE_LIMIT_SCRIPT,
+                    repo_input(repo.path())?,
+                )?;
 
                 assert_eq!(labeled.code.as_deref(), Some(NEGATIVE_LIMIT_CODE));
-                assert_label_in_script(&labeled, NEGATIVE_LIMIT_SCRIPT)?;
+                assert_label_in_script!(&labeled, NEGATIVE_LIMIT_SCRIPT);
 
                 Ok(())
             }

@@ -145,7 +145,7 @@ mod tests {
 
     use nu_plugin_gix_testing_support::{
         AssertionError, CorruptTestRepo, FixtureError, TestRepo, assert_label_in_script,
-        corrupt_repo, eval_value, pin_pwd, plain_dir, raised_labeled, test_repo,
+        corrupt_repo, eval_labeled_error, eval_value, pin_pwd, plain_dir, test_repo,
     };
     use nu_plugin_test_support::PluginTest;
     use nu_protocol::{PipelineData, ShellError, Span};
@@ -259,7 +259,7 @@ mod tests {
                     Invocation::CurrentDir => (OPEN_COMMAND.to_owned(), dir.path()),
                 };
 
-                let labeled = raised_labeled(&mut plugin, &script, PipelineData::empty())?;
+                let labeled = eval_labeled_error(&mut plugin, &script, PipelineData::empty())?;
                 let searched = searched.to_string_lossy();
 
                 assert_eq!(labeled.code.as_deref(), Some(NOT_A_REPOSITORY_CODE));
@@ -268,7 +268,7 @@ mod tests {
                     "message should name {searched}, got {:?}",
                     labeled.msg
                 );
-                assert_label_in_script(&labeled, &script)?;
+                assert_label_in_script!(&labeled, &script);
 
                 Ok(())
             }
@@ -284,7 +284,7 @@ mod tests {
                 pin_pwd(&mut plugin, dir.path());
 
                 let script = format!("{OPEN_FLAG} {:?}", dir.path());
-                let labeled = raised_labeled(&mut plugin, &script, PipelineData::empty())?;
+                let labeled = eval_labeled_error(&mut plugin, &script, PipelineData::empty())?;
                 let path = dir.path().to_string_lossy();
 
                 assert_eq!(labeled.code.as_deref(), Some(OPEN_FAILED_CODE));
@@ -293,7 +293,7 @@ mod tests {
                     "message should name {path}, got {:?}",
                     labeled.msg
                 );
-                assert_label_in_script(&labeled, &script)?;
+                assert_label_in_script!(&labeled, &script);
 
                 Ok(())
             }

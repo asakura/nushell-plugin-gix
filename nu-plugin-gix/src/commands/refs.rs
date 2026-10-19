@@ -538,7 +538,7 @@ mod tests {
 
     use nu_plugin_gix_testing_support::{
         AssertionError, FixtureError, GIT_DIR, MAIN_BRANCH, TaggedTestRepo, TestRepo,
-        UnbornTestRepo, assert_label_in_script, eval_value, first_row, raised_labeled,
+        UnbornTestRepo, assert_label_in_script, eval_labeled_error, eval_value, first_row,
         record_column, tagged_repo, test_repo, unborn_repo,
     };
     use nu_plugin_test_support::PluginTest;
@@ -645,7 +645,7 @@ mod tests {
             let mut plugin = plugin_test?;
             let repo = unborn_repo?;
 
-            let labeled = raised_labeled(&mut plugin, HEAD_COMMAND, repo_input(repo.path())?)?;
+            let labeled = eval_labeled_error(&mut plugin, HEAD_COMMAND, repo_input(repo.path())?)?;
 
             assert_eq!(labeled.code.as_deref(), Some(UNBORN_HEAD_CODE));
 
@@ -823,10 +823,10 @@ mod tests {
             let repo = test_repo?;
             let script = argument.script(value, repo.head.as_str());
 
-            let labeled = raised_labeled(&mut plugin, &script, repo_input(repo.path())?)?;
+            let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
 
             assert_eq!(labeled.code.as_deref(), Some(code));
-            assert_label_in_script(&labeled, &script)?;
+            assert_label_in_script!(&labeled, &script);
 
             assert!(
                 labeled.msg.contains(value),
@@ -847,10 +847,10 @@ mod tests {
             let head = repo.head.as_str();
             let script = format!(r#"{SET_COMMAND} "{SHORTHAND_REF}" "{head}" --expect missing"#);
 
-            let labeled = raised_labeled(&mut plugin, &script, repo_input(repo.path())?)?;
+            let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
 
             assert_eq!(labeled.code.as_deref(), Some(INVALID_REF_NAME_CODE));
-            assert_label_in_script(&labeled, &script)?;
+            assert_label_in_script!(&labeled, &script);
 
             assert!(
                 labeled.msg.contains(SHORTHAND_REF),
@@ -873,10 +873,10 @@ mod tests {
             let script =
                 format!(r#"{SET_COMMAND} "{MAIN_BRANCH}" "{parent}" --expect "{SHA1_HEX}""#);
 
-            let labeled = raised_labeled(&mut plugin, &script, repo_input(repo.path())?)?;
+            let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
 
             assert_eq!(labeled.code.as_deref(), Some(REF_MOVED_CODE));
-            assert_label_in_script(&labeled, &script)?;
+            assert_label_in_script!(&labeled, &script);
 
             assert!(
                 labeled.msg.contains(MAIN_BRANCH),
@@ -897,10 +897,10 @@ mod tests {
             let head = repo.head.as_str();
             let script = format!(r#"{SET_COMMAND} "{MAIN_BRANCH}" "{head}""#);
 
-            let labeled = raised_labeled(&mut plugin, &script, repo_input(repo.path())?)?;
+            let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
 
             assert_eq!(labeled.code.as_deref(), Some(MISSING_EXPECT_CODE));
-            assert_label_in_script(&labeled, &script)?;
+            assert_label_in_script!(&labeled, &script);
 
             assert!(
                 labeled.msg.contains(EXPECT_SPELLING),
@@ -930,7 +930,7 @@ mod tests {
 
             fs::remove_dir_all(repo.path())?;
 
-            let labeled = raised_labeled(&mut plugin, script, input)?;
+            let labeled = eval_labeled_error(&mut plugin, script, input)?;
 
             assert_eq!(labeled.code.as_deref(), Some(REPOSITORY_GONE_CODE));
             assert!(!labeled.msg.is_empty(), "the error has no message");

@@ -5,8 +5,6 @@ use nu_protocol::{LabeledError, PipelineData, ShellError, Span, Value};
 
 const EXPECTED_ERROR: &str = "expected an error";
 const EXPECTED_LABELED: &str = "expected a labeled error";
-const EXPECTED_LABEL: &str = "expected a label";
-const EMPTY_LABEL_TEXT: &str = "the label has no text";
 const EXPECTED_ROW: &str = "expected at least one row";
 
 /// Why an assertion helper could not produce the value it was asked for.
@@ -49,7 +47,7 @@ pub fn eval_value(
 /// # Errors
 ///
 /// Returns [`AssertionError::Failure`] when the script succeeds or raises an error that is not labeled.
-pub fn raised_labeled(
+pub fn eval_labeled_error(
     plugin: &mut PluginTest,
     script: &str,
     input: PipelineData,
@@ -67,29 +65,34 @@ pub fn raised_labeled(
     }
 }
 
-/// Asserts that the first label of `labeled` has text and points inside `script`.
+/// Asserts that the first label of a [`LabeledError`] has text and a non-empty span inside `script`.
 ///
-/// # Errors
+/// Expands in place like [`assert!`], so a failure reports the calling test's line.
 ///
-/// Returns [`AssertionError::Failure`] when `labeled` has no label, the label has no text, or its span
-/// does not lie inside `script`.
-pub fn assert_label_in_script(labeled: &LabeledError, script: &str) -> Result<(), AssertionError> {
-    let label = labeled
-        .labels
-        .first()
-        .ok_or_else(|| AssertionError::Failure(EXPECTED_LABEL.to_owned()))?;
+/// # Panics
+///
+/// Panics when the error has no label, its first label has no text, or that label's span is empty or
+/// extends past the end of `script`.
+#[macro_export]
+macro_rules! assert_label_in_script {
+    ($labeled:expr, $script:expr $(,)?) => {{
+        let labeled: &::nu_protocol::LabeledError = $labeled;
+        let script: &str = $script;
+        let label = labeled.labels.first();
 
-    if label.text.is_empty() {
-        return Err(AssertionError::Failure(EMPTY_LABEL_TEXT.to_owned()));
-    }
-    if label.span.start >= label.span.end || label.span.end > script.len() {
-        return Err(AssertionError::Failure(format!(
-            "label {:?} is outside the script",
-            label.span
-        )));
-    }
-
-    Ok(())
+        assert!(
+            label.is_some_and(|label| !label.text.is_empty()),
+            "expected a first label with text, got {:?}",
+            labeled.labels
+        );
+        assert!(
+            label.is_some_and(
+                |label| label.span.start < label.span.end && label.span.end <= script.len()
+            ),
+            "the first label of {:?} is outside the script",
+            labeled.labels
+        );
+    }};
 }
 
 /// Reads the `column` of a record value.
