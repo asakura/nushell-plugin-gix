@@ -692,8 +692,8 @@ mod tests {
                 }
             );
 
-            let stored = repo
-                .repo()
+            let handle = repo.repo();
+            let stored = handle
                 .try_find_reference(NEW_NAME)?
                 .ok_or_else(|| TestError::Failure("expected the new reference".to_owned()))?;
 
