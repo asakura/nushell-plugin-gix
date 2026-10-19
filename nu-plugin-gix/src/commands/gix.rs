@@ -1,9 +1,10 @@
 //! `gix`: the parent command, which prints the plugin's help.
 
-use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
-use nu_protocol::{Category, LabeledError, Signature, Type, Value};
+use crate::GixPlugin;
+use crate::commands::CommandError;
 
-use super::super::GixPlugin;
+use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
+use nu_protocol::{Category, LabeledError, Signature, Span, Type, Value};
 
 const COMMAND_NAME: &str = "gix";
 
@@ -26,7 +27,8 @@ impl SimplePluginCommand for Gix {
     }
 
     fn extra_description(&self) -> &'static str {
-        "You must use one of the following subcommands. Using this command as-is will only produce this help message."
+        "You must use one of the following subcommands. Using this command as-is will only produce this help message.\n\
+        Error codes: gix::help-unavailable"
     }
 
     fn signature(&self) -> Signature {
@@ -46,22 +48,105 @@ impl SimplePluginCommand for Gix {
         call: &EvaluatedCall,
         _input: &Value,
     ) -> Result<Value, LabeledError> {
-        Ok(Value::string(engine.get_help()?, call.head))
+        help_call(engine, call.head).map_err(|e| e.into_labeled(call.head))
     }
+}
+
+/// Reads the help text the engine renders for the parent command; a failure points at the call.
+pub fn help_call(engine: &EngineInterface, span: Span) -> Result<Value, CommandError> {
+    let help = engine
+        .get_help()
+        .map_err(|source| CommandError::HelpUnavailable {
+            source: Box::new(source),
+            span,
+        })?;
+
+    Ok(Value::string(help, span))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::fixtures::plugin_test;
+
+    use nu_plugin::Plugin as _;
+    use nu_plugin_gix_testing_support::FixtureError;
+    use nu_plugin_test_support::PluginTest;
+    use nu_protocol::{ShellError, Span};
     use rstest::rstest;
 
+    const EVAL_HELP: &str = "gix";
+    /// Each `Subcommands:` entry reads `  <name> (plugin) - <description>`: the name ends at either.
+    const ENTRY_NAME_ENDS: [&str; 2] = [" (", " - "];
+
+    /// Errors raised by the `gix` command end-to-end tests.
+    #[derive(Debug, thiserror::Error)]
+    enum TestError {
+        #[error(transparent)]
+        Fixture(#[from] FixtureError),
+
+        #[error(transparent)]
+        Shell(#[from] ShellError),
+
+        #[error("Test failure: {0}")]
+        Failure(String),
+    }
+
+    /// Metadata checks that `eval` cannot express: they inspect the `Signature`
+    /// directly rather than the command surface.
     mod signature {
         use super::*;
 
         #[rstest]
         fn is_named_gix() {
             assert_eq!(Gix.signature().name, COMMAND_NAME);
+        }
+    }
+
+    mod help {
+        use super::*;
+
+        /// The command name at the start of a help line, or the whole line when it has no entry marker.
+        fn listed_name(line: &str) -> &str {
+            let entry = line.trim_start();
+
+            let end = ENTRY_NAME_ENDS
+                .iter()
+                .filter_map(|marker| entry.find(*marker))
+                .min();
+
+            end.and_then(|end| entry.get(..end)).unwrap_or(entry)
+        }
+
+        #[rstest]
+        fn lists_the_registered_subcommands(
+            plugin_test: Result<PluginTest, FixtureError>,
+        ) -> Result<(), TestError> {
+            let commands = GixPlugin::default().commands();
+
+            let subcommands: Vec<&str> = commands
+                .iter()
+                .map(|command| command.name())
+                .filter(|name| *name != COMMAND_NAME)
+                .collect();
+
+            if subcommands.is_empty() {
+                return Err(TestError::Failure(
+                    "the plugin registers no subcommands of `gix`".to_owned(),
+                ));
+            }
+
+            let mut test = plugin_test?;
+            let help = test.eval(EVAL_HELP)?.into_value(Span::test_data())?;
+            let text = help.as_str()?;
+            let listed: Vec<&str> = text.lines().map(listed_name).collect();
+
+            for name in subcommands {
+                assert!(listed.contains(&name), "help is missing `{name}`:\n{text}");
+            }
+
+            Ok(())
         }
     }
 }
