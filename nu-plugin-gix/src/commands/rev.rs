@@ -273,7 +273,7 @@ mod tests {
     const ARGUMENT_SPAN: Span = Span { start: 21, end: 25 };
     const REVISION_SPAN: Span = Span { start: 8, end: 12 };
     const SHORT_LEN_VALUE_SPAN: Span = Span { start: 25, end: 26 };
-    const UNBORN_BRANCH: &str = "refs/heads/loop";
+    const DANGLING_REF: &str = "refs/heads/loop";
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {
@@ -544,8 +544,8 @@ mod tests {
             SHORT_LEN_VALUE_SPAN
         )]
         #[case::other_failures_at_the_revision(
-            GixError::UnbornHead {
-                name: UNBORN_BRANCH.to_owned(),
+            GixError::DanglingRef {
+                name: DANGLING_REF.to_owned(),
             },
             REVISION_SPAN
         )]
