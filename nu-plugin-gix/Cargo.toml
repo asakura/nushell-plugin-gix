@@ -23,11 +23,13 @@ thiserror = { workspace = true }
 typetag = { workspace = true }
 
 [dev-dependencies]
+bstr = { workspace = true }
 chrono = { workspace = true }
 gix = { workspace = true }
 miette = { workspace = true }
 nu-plugin-gix-testing-support = { workspace = true }
 nu-plugin-test-support = { workspace = true }
+nu-test-support = { workspace = true }
 rstest = { workspace = true }
 tempfile = { workspace = true }
 
