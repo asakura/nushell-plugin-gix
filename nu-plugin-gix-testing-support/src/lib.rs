@@ -1,10 +1,11 @@
 //! Shared test fixtures for `nushell-plugin-gix`: throwaway git repositories built with `gix`,
 //! and the in-process plugin-engine helpers (`plugin_test_for`, `custom_value_input`, `pin_pwd`)
-//! used by plugin tests.
+//! used by plugin tests, plus the script assertions (`eval_value`, `raised_labeled`, ...) that
+//! inspect what a script produces.
 
 use gix::actor::SignatureRef;
 use gix::discover::upwards::{Error as UpwardsError, Options as UpwardsOptions, TrustPolicy};
-use gix::objs::Tree;
+use gix::objs::{Blob, Kind, Tag, Tree};
 use gix::refs::{
     Target,
     name::Error as RefsNameError,
@@ -19,9 +20,16 @@ use rstest::fixture;
 use tempfile::TempDir;
 
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write as _},
     path::{Path, PathBuf},
     sync::Arc,
+};
+
+mod assertions;
+
+pub use self::assertions::{
+    AssertionError, assert_label_in_script, eval_value, first_row, raised_labeled, record_column,
 };
 
 /// Name of the environment variable that holds the engine's working directory.
@@ -77,6 +85,9 @@ pub const HEAD_FILE: &str = "HEAD";
 /// Name of the repository configuration file inside the git directory.
 const CONFIG_FILE: &str = "config";
 
+/// Configuration section that names the committer of a repository.
+const USER_SECTION: &str = "[user]";
+
 /// Repository configuration that cannot be parsed: the `[core]` section header is never closed.
 const CORRUPT_CONFIG: &str = "[core\n";
 
@@ -103,6 +114,30 @@ const SYMBOLIC_REF_PREFIX: &str = "ref: ";
 
 /// Branch that every fixture repository's `HEAD` names; [`test_repo`] also commits to it.
 pub const MAIN_BRANCH: &str = "refs/heads/main";
+
+/// Full name of the branch that [`tagged_repo`]'s `HEAD` names; it holds the fixture's commit.
+pub const FEATURE_BRANCH_REF: &str = "refs/heads/feature";
+
+/// Short name of [`FEATURE_BRANCH_REF`], as a revision expression spells it.
+pub const FEATURE_BRANCH: &str = "feature";
+
+/// Full name of the lightweight tag that [`tagged_repo`] points at its commit.
+pub const LIGHT_TAG_REF: &str = "refs/tags/light";
+
+/// Full name of the annotated tag that [`tagged_repo`] points at its tag object.
+pub const ANNOTATED_TAG_REF: &str = "refs/tags/annotated";
+
+/// Short name of the annotated tag, as a revision expression spells it.
+pub const ANNOTATED_TAG: &str = "annotated";
+
+/// Message of the annotated tag object that [`tagged_repo`] writes.
+pub const ANNOTATED_TAG_MESSAGE: &str = "release";
+
+/// Subject of the commit that [`tagged_repo`] makes.
+pub const INITIAL_MESSAGE: &str = "initial";
+
+/// Content of the blob that [`tagged_repo`] writes.
+pub const BLOB_CONTENT: &[u8] = b"blob content";
 
 /// The fixture committer and author, dated `time` (a raw git timestamp such as [`COMMITTER_TIME`]).
 ///
@@ -259,14 +294,29 @@ fn init_isolated(dir: &Path, kind: create::Kind) -> Result<gix::Repository, Fixt
     Ok(repo.to_thread_local())
 }
 
-/// Points `HEAD` of `repo` at [`MAIN_BRANCH`], pinning the unborn branch name whatever `init.defaultBranch` says.
-fn point_head_at_main(repo: &gix::Repository) -> Result<(), FixtureError> {
+/// Points `HEAD` of `repo` at the full branch name `branch`, pinning the unborn branch name whatever `init.defaultBranch`
+/// says.
+fn point_head_at(repo: &gix::Repository, branch: &str) -> Result<(), FixtureError> {
     repo.edit_reference(RefEdit::update(
         HEAD_REF.try_into()?,
-        Target::Symbolic(MAIN_BRANCH.try_into()?),
+        Target::Symbolic(branch.try_into()?),
         PreviousValue::Any,
         FIXTURE_REFLOG_MESSAGE,
     ))?;
+
+    Ok(())
+}
+
+/// Appends the fixture committer to the configuration of the repository in `dir`, keeping the `init` settings.
+///
+/// Git refuses to write a reflog without a committer, and the isolated options ignore the user's identity, so the
+/// repository carries its own. Writing the identity into the local configuration keeps the fixture hermetic.
+fn add_committer_identity(dir: &Path) -> Result<(), FixtureError> {
+    let config = dir.join(GIT_DIR).join(CONFIG_FILE);
+    let mut file = fs::OpenOptions::new().append(true).open(config)?;
+    let identity =
+        format!("{USER_SECTION}\n\tname = {COMMITTER_NAME}\n\temail = {COMMITTER_EMAIL}\n");
+    file.write_all(identity.as_bytes())?;
 
     Ok(())
 }
@@ -279,7 +329,7 @@ fn point_head_at_main(repo: &gix::Repository) -> Result<(), FixtureError> {
 pub fn unborn_repo() -> Result<UnbornTestRepo, FixtureError> {
     let dir = TempDir::new()?;
     let repo = init_isolated(dir.path(), create::Kind::WithWorktree)?;
-    point_head_at_main(&repo)?;
+    point_head_at(&repo, MAIN_BRANCH)?;
 
     Ok(UnbornTestRepo { dir })
 }
@@ -292,7 +342,7 @@ pub fn unborn_repo() -> Result<UnbornTestRepo, FixtureError> {
 pub fn bare_repo() -> Result<UnbornTestRepo, FixtureError> {
     let dir = TempDir::new()?;
     let repo = init_isolated(dir.path(), create::Kind::Bare)?;
-    point_head_at_main(&repo)?;
+    point_head_at(&repo, MAIN_BRANCH)?;
 
     Ok(UnbornTestRepo { dir })
 }
@@ -350,7 +400,7 @@ pub fn linked_repo() -> Result<LinkedTestRepo, FixtureError> {
 pub fn test_repo() -> Result<TestRepo, FixtureError> {
     let dir = TempDir::new()?;
     let repo = init_isolated(dir.path(), create::Kind::WithWorktree)?;
-    point_head_at_main(&repo)?;
+    point_head_at(&repo, MAIN_BRANCH)?;
 
     // `empty_tree()` is virtual and never reaches the object database, so write it once.
     let tree = repo.write_object(Tree::empty())?.detach();
@@ -389,7 +439,7 @@ pub fn test_repo() -> Result<TestRepo, FixtureError> {
 pub fn forked_repo() -> Result<ForkedTestRepo, FixtureError> {
     let dir = TempDir::new()?;
     let repo = init_isolated(dir.path(), create::Kind::WithWorktree)?;
-    point_head_at_main(&repo)?;
+    point_head_at(&repo, MAIN_BRANCH)?;
 
     let tree = repo.write_object(Tree::empty())?.detach();
 
@@ -437,6 +487,98 @@ pub fn forked_repo() -> Result<ForkedTestRepo, FixtureError> {
         first_parent: first_parent.detach().to_string(),
         second_parent: second_parent.to_string(),
         root: root.detach().to_string(),
+    })
+}
+
+/// A throwaway repository whose `HEAD` names [`FEATURE_BRANCH_REF`], with one commit, a lightweight tag, an annotated
+/// tag, and a blob.
+///
+/// Returned by [`tagged_repo`]. The commit is the target of the branch, of the lightweight tag, and of the annotated
+/// tag object, so each name resolves to a known object. The repository's configuration names [`COMMITTER_NAME`], so
+/// reflog entries written through it have an identity.
+#[derive(Debug)]
+pub struct TaggedTestRepo {
+    /// The temporary directory backing the repository; dropping it deletes the repository.
+    pub dir: TempDir,
+    /// Id of the commit that `HEAD`, the branch, and the lightweight tag all name.
+    pub commit: gix::ObjectId,
+    /// Id of the empty tree that the commit points at.
+    pub tree: gix::ObjectId,
+    /// Id of the annotated tag object, which points at the commit.
+    pub tag: gix::ObjectId,
+    /// Id of the blob with content [`BLOB_CONTENT`].
+    pub blob: gix::ObjectId,
+}
+
+impl TaggedTestRepo {
+    /// The absolute path of the worktree root of the repository.
+    #[must_use = "returns the path; the repository is unchanged"]
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
+/// Builds the tagged fixture repository: a commit on [`FEATURE_BRANCH_REF`], which `HEAD` names, plus a lightweight tag,
+/// an annotated tag, and a blob.
+#[fixture]
+pub fn tagged_repo() -> Result<TaggedTestRepo, FixtureError> {
+    let dir = TempDir::new()?;
+    let repo = init_isolated(dir.path(), create::Kind::WithWorktree)?;
+    add_committer_identity(dir.path())?;
+    point_head_at(&repo, FEATURE_BRANCH_REF)?;
+
+    // `empty_tree()` is virtual and never reaches the object database, so write it once. The
+    // `Id::shorten` of a revision needs to read it back.
+    let tree = repo.write_object(Tree::empty())?.detach();
+    let signature = committer(COMMITTER_TIME);
+
+    let commit = repo
+        .commit_as(
+            signature,
+            signature,
+            HEAD_REF,
+            INITIAL_MESSAGE,
+            tree,
+            Vec::<gix::ObjectId>::new(),
+        )?
+        .detach();
+
+    repo.edit_reference(RefEdit::update(
+        LIGHT_TAG_REF.try_into()?,
+        Target::Object(commit),
+        PreviousValue::MustNotExist,
+        FIXTURE_REFLOG_MESSAGE,
+    ))?;
+
+    let tag = Tag {
+        target: commit,
+        target_kind: Kind::Commit,
+        name: ANNOTATED_TAG.into(),
+        tagger: Some(signature.into()),
+        message: ANNOTATED_TAG_MESSAGE.into(),
+        signature: None,
+    };
+    let tag_id = repo.write_object(&tag)?.detach();
+
+    repo.edit_reference(RefEdit::update(
+        ANNOTATED_TAG_REF.try_into()?,
+        Target::Object(tag_id),
+        PreviousValue::MustNotExist,
+        FIXTURE_REFLOG_MESSAGE,
+    ))?;
+
+    let blob = repo
+        .write_object(&Blob {
+            data: BLOB_CONTENT.to_vec(),
+        })?
+        .detach();
+
+    Ok(TaggedTestRepo {
+        dir,
+        commit,
+        tree,
+        tag: tag_id,
+        blob,
     })
 }
 
@@ -506,6 +648,20 @@ where
     Ok(test)
 }
 
+/// A fresh in-process [`PluginTest`] over a default-constructed `P` registered as `name`.
+///
+/// Shorthand for [`plugin_test_for`] with `Arc::new(P::default())`, giving each test its own plugin instance.
+///
+/// # Errors
+///
+/// Returns [`FixtureError::Failure`] when the engine rejects the plugin or the `describe` command.
+pub fn default_plugin_test<P>(name: &str) -> Result<PluginTest, FixtureError>
+where
+    P: Plugin + Default + Send + 'static,
+{
+    plugin_test_for(name, Arc::new(P::default()))
+}
+
 /// Pipeline input carrying `value` as a custom value, as a command receives it from the engine.
 #[must_use = "returns the pipeline input; discarding it runs nothing"]
 pub fn custom_value_input<V>(value: V) -> PipelineData
@@ -513,6 +669,23 @@ where
     V: CustomValue + 'static,
 {
     Value::test_custom_value(Box::new(value)).into_pipeline_data()
+}
+
+/// Pipeline input holding the custom value built from the fixture directory `dir`.
+///
+/// `discover` turns `dir` into whatever location type `build` needs, and `build` makes the custom value from it, so
+/// the helper works with any handle and any error type.
+///
+/// # Errors
+///
+/// Returns the error of `discover` unchanged.
+pub fn discovered_input<D, B, L, V, E>(dir: &Path, discover: D, build: B) -> Result<PipelineData, E>
+where
+    D: FnOnce(&Path) -> Result<L, E>,
+    B: FnOnce(L) -> V,
+    V: CustomValue + 'static,
+{
+    Ok(custom_value_input(build(discover(dir)?)))
 }
 
 /// Pins `$env.PWD` of `test` to `dir`: the bare test engine has no working directory, and
