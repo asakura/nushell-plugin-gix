@@ -77,8 +77,9 @@ mod tests {
     use rstest::rstest;
 
     const EVAL_HELP: &str = "gix";
-    /// Each `Subcommands:` entry reads `  <name> (plugin) - <description>`: the name ends at either.
-    const ENTRY_NAME_ENDS: [&str; 2] = [" (", " - "];
+    /// Each `Subcommands:` entry reads `  <name> (plugin) - <description>`: the name ends at either marker.
+    const PLUGIN_MARKER: &str = " (";
+    const DESCRIPTION_MARKER: &str = " - ";
 
     /// Errors raised by the `gix` command end-to-end tests.
     #[derive(Debug, thiserror::Error)]
@@ -111,12 +112,12 @@ mod tests {
         fn listed_name(line: &str) -> &str {
             let entry = line.trim_start();
 
-            let end = ENTRY_NAME_ENDS
-                .iter()
-                .filter_map(|marker| entry.find(*marker))
-                .min();
+            let head = entry
+                .split_once(PLUGIN_MARKER)
+                .map_or(entry, |(name, _)| name);
 
-            end.and_then(|end| entry.get(..end)).unwrap_or(entry)
+            head.split_once(DESCRIPTION_MARKER)
+                .map_or(head, |(name, _)| name)
         }
 
         #[rstest]
