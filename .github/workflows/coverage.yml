@@ -17,20 +17,22 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
 
-    permissions:
-      pages: write
-      id-token: write
-
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
     steps:
       - uses: actions/checkout@v7
 
       - uses: DeterminateSystems/nix-installer-action@v23
 
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+
+        with:
+          use-flakehub: false
+
+      # flake.lock is keyed in because rust-cache only sees the runner's
+      # rustc, not the flake's toolchain (see ci.yml).
       - uses: Swatinem/rust-cache@v2
+
+        with:
+          key: ${{ hashFiles('flake.lock') }}
 
       # Run the workspace test suite once under coverage instrumentation,
       # without generating a report yet, so the html and json reports below
@@ -91,12 +93,28 @@ jobs:
             }
           ' > target/llvm-cov/html/cargo-deny.json
 
-      - uses: actions/configure-pages@v6
-
       - uses: actions/upload-pages-artifact@v5
 
         with:
           path: target/llvm-cov/html
+
+  # Deploying lives in its own job so a Pages failure cannot fail the
+  # coverage job: rust-cache only saves on success, and a failing deploy
+  # would leave every coverage run building from scratch.
+  deploy:
+    needs: coverage
+    runs-on: ubuntu-latest
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/configure-pages@v6
 
       - id: deployment
         uses: actions/deploy-pages@v5

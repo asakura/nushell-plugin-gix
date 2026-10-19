@@ -21,7 +21,23 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@v23
 
+      # Caches locally built store paths (the rust-overlay toolchain, the
+      # git-hooks config) in the GitHub Actions cache; anything already on
+      # cache.nixos.org is still fetched from there.
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+
+        with:
+          use-flakehub: false
+
+      # The toolchain comes from the flake, but rust-cache only sees the
+      # runner's preinstalled rustc, so flake.lock is keyed in explicitly:
+      # a toolchain bump must roll the key instead of restoring stale
+      # artifacts as a "full match" and never saving fresh ones.
       - uses: Swatinem/rust-cache@v2
+
+        with:
+          key: ${{ hashFiles('flake.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo fmt
         run: nix develop -c cargo fmt --check
@@ -47,3 +63,31 @@ jobs:
 
       - name: cargo deny check
         run: nix develop -c cargo deny check
+
+  # Builds the static release binaries on every push to main so their store
+  # paths (crane's dependency-only artifacts in particular) land in main's
+  # magic-nix-cache. Release runs are scoped to their tag and can only read
+  # caches written on the default branch, so without this every release
+  # would rebuild the whole dependency tree twice from scratch.
+  release-build:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        package:
+          - nu_plugin_gix-x86_64-linux-musl
+          - nu_plugin_gix-aarch64-linux-musl
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: DeterminateSystems/nix-installer-action@v23
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+
+        with:
+          use-flakehub: false
+
+      - name: nix build
+        run: nix build ".#${{ matrix.package }}" -L
