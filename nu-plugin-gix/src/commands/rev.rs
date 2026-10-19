@@ -23,6 +23,14 @@ const KIND_COLUMN: &str = "kind";
 const TREE_COLUMN: &str = "tree";
 const SHORT_COLUMN: &str = "short";
 
+/// Sample values shown as the output of the command examples.
+const EXAMPLE_OID: &str = "0123456789abcdef0123456789abcdef01234567";
+const EXAMPLE_TREE: &str = "89abcdef0123456789abcdef0123456789abcdef";
+const EXAMPLE_SHORT: &str = "0123456";
+const EXAMPLE_LONG_SHORT: &str = "0123456789ab";
+const EXAMPLE_COMMIT_KIND: &str = "commit";
+const EXAMPLE_TREE_KIND: &str = "tree";
+
 /// Resolves a revision expression against a repository handle from `gix open`.
 #[derive(Clone, Copy, Debug)]
 pub struct Rev;
@@ -49,17 +57,32 @@ impl SimplePluginCommand for Rev {
             Example {
                 example: "gix open | gix rev HEAD",
                 description: "Resolve HEAD of the current repository to its commit id, kind, tree, and short id",
-                result: None,
+                result: Some(example_rev(
+                    EXAMPLE_OID,
+                    EXAMPLE_COMMIT_KIND,
+                    Some(EXAMPLE_TREE),
+                    EXAMPLE_SHORT,
+                )),
             },
             Example {
                 example: "gix open | gix rev main --short-len 12",
                 description: "Resolve the branch `main`, abbreviating its id to 12 hexadecimal characters",
-                result: None,
+                result: Some(example_rev(
+                    EXAMPLE_OID,
+                    EXAMPLE_COMMIT_KIND,
+                    Some(EXAMPLE_TREE),
+                    EXAMPLE_LONG_SHORT,
+                )),
             },
             Example {
                 example: "gix open | gix rev 'HEAD^{tree}'",
                 description: "Resolve the tree that HEAD points to",
-                result: None,
+                result: Some(example_rev(
+                    EXAMPLE_TREE,
+                    EXAMPLE_TREE_KIND,
+                    Some(EXAMPLE_TREE),
+                    EXAMPLE_SHORT,
+                )),
             },
         ]
     }
@@ -177,6 +200,16 @@ fn parse_short_len(len: Spanned<i64>) -> Result<Spanned<usize>, CommandError> {
             span: len.span,
         })
     }
+}
+
+/// A sample `{ oid, kind, tree, short }` record; a `None` tree renders as null.
+fn example_rev(oid: &str, kind: &str, tree: Option<&str>, short: &str) -> Value {
+    Value::test_record(record! {
+        OID_COLUMN => Value::test_string(oid),
+        KIND_COLUMN => Value::test_string(kind),
+        TREE_COLUMN => tree.map_or_else(Value::test_nothing, Value::test_string),
+        SHORT_COLUMN => Value::test_string(short),
+    })
 }
 
 /// Maps a resolved revision to a `{ oid, kind, tree, short }` record; the tree is null for blobs.
