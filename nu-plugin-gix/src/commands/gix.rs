@@ -150,4 +150,34 @@ mod tests {
             Ok(())
         }
     }
+
+    /// Registration checked against a hardcoded list, so a command dropped from `commands()` fails here.
+    mod registration {
+        use super::*;
+
+        /// Every command the plugin registers, spelled as Nushell sees it.
+        const EXPECTED_COMMANDS: [&str; 8] = [
+            "gix",
+            "gix log",
+            "gix open",
+            "gix ref",
+            "gix ref head",
+            "gix ref list",
+            "gix ref set",
+            "gix rev",
+        ];
+
+        #[rstest]
+        fn matches_the_expected_command_names() {
+            let commands = GixPlugin::default().commands();
+
+            let mut registered: Vec<&str> = commands.iter().map(|command| command.name()).collect();
+            registered.sort_unstable();
+
+            let mut expected = EXPECTED_COMMANDS.to_vec();
+            expected.sort_unstable();
+
+            assert_eq!(registered, expected);
+        }
+    }
 }
