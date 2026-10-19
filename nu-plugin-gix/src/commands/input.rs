@@ -1,4 +1,6 @@
-//! Typed access to handle-valued pipeline input.
+//! Typed access to pipeline input and call arguments: handle-valued input, the raw value a command
+//! receives, the opened repository behind a handle, and argument reads that point their errors at
+//! the argument they came from.
 
 use crate::cdt::{self, Handle, Repository};
 use crate::commands::{CommandError, error::WrongInput};
@@ -35,22 +37,27 @@ pub fn acquire_handle(
 ) -> Result<Arc<OpenRepository>, CommandError> {
     registry
         .acquire(handle.id, &handle.location())
-        .map_err(|source| match &source {
-            GixError::RepositoryGone { git_dir } => CommandError::HandleRepositoryGone {
-                git_dir: git_dir.clone(),
-                span,
-                source,
-            },
-            GixError::Open {
-                path,
-                source: _source,
-            } => CommandError::HandleOpenFailed {
-                path: path.clone(),
-                span,
-                source,
-            },
-            _ => CommandError::Git(source),
-        })
+        .map_err(|source| handle_failure(source, span))
+}
+
+/// Maps a failure to acquire a handle's repository to the error that points at the handle.
+fn handle_failure(source: GixError, span: Span) -> CommandError {
+    match &source {
+        GixError::RepositoryGone { git_dir } => CommandError::HandleRepositoryGone {
+            git_dir: git_dir.clone(),
+            span,
+            source,
+        },
+        GixError::Open {
+            path,
+            source: _source,
+        } => CommandError::HandleOpenFailed {
+            path: path.clone(),
+            span,
+            source,
+        },
+        _ => CommandError::Git(source),
+    }
 }
 
 /// Collects the pipeline input into one value; a failing input stream is reported at `span`, the call that received it.
@@ -99,49 +106,334 @@ mod tests {
 
     use crate::cdt::Repository;
 
-    use nu_protocol::Span;
+    use nu_plugin_gix_core::Registry;
+    use nu_plugin_gix_testing_support::{FixtureError, HEAD_FILE, TestRepo, test_repo};
+    use nu_protocol::{ListStream, ShellError, Signals};
     use rstest::rstest;
 
-    use std::path::PathBuf;
+    use std::{assert_matches, fs, io, iter, path::Path};
+
+    const INVALID_INPUT_CODE: &str = "gix::invalid-input";
+    const INVALID_ARGUMENT_CODE: &str = "gix::invalid-argument";
+    const UPSTREAM_FAILURE: &str = "upstream failed";
+    const EXPECT_FLAG: &str = "expect";
+    const MESSAGE_FLAG: &str = "message";
+    const FIRST_POSITION: usize = 0;
+    const SECOND_POSITION: usize = 1;
+    const CALL_SPAN: Span = Span { start: 1, end: 7 };
+    const FLAG_SPAN: Span = Span { start: 9, end: 20 };
+    const ARGUMENT_SPAN: Span = Span { start: 21, end: 25 };
+    const UNREADABLE_VALUE: i64 = 1;
+    const PRESENT_VALUE: &str = "main";
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {
+        #[error(transparent)]
+        Shell(#[from] ShellError),
+
+        #[error(transparent)]
+        Fixture(#[from] FixtureError),
+
+        #[error(transparent)]
+        Command(#[from] CommandError),
+
+        #[error(transparent)]
+        Git(#[from] GixError),
+
+        #[error(transparent)]
+        Io(#[from] io::Error),
+
         #[error("Test failure: {0}")]
         Failure(String),
     }
 
-    fn repo() -> Repository {
-        Repository {
-            id: 1,
-            path: PathBuf::from("/tmp/r"),
-            git_dir: PathBuf::from("/tmp/r/.git"),
-            worktree: None,
-        }
-    }
-
-    mod handle_from {
+    /// Checks `eval` cannot express: the engine's input type check rejects non-custom
+    /// pipeline input before the command runs, so the `WrongInput` mapping is only
+    /// reachable directly until a command emits a second handle type.
+    mod wrong_input_mapping {
         use super::*;
 
         #[rstest]
-        fn accepts_the_expected_handle() -> Result<(), TestError> {
-            let input = repo().into_value(Span::test_data());
-            let found =
-                handle_from::<Repository>(&input).map_err(|e| TestError::Failure(e.to_string()))?;
+        #[case::int(Value::int(1, Span::test_data()), "int")]
+        #[case::string(Value::string("x", Span::test_data()), "string")]
+        fn maps_the_received_type_into_the_error(
+            #[case] input: Value,
+            #[case] got: &str,
+        ) -> Result<(), TestError> {
+            let err = handle_from::<Repository>(&input)
+                .err()
+                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
-            assert_eq!(found, &repo());
+            assert_matches!(
+                &err,
+                CommandError::WrongInput(w) if w.got == got,
+                "got {err:?}"
+            );
+
+            Ok(())
+        }
+    }
+
+    /// Unit tests for the input read that no script can make fail: the engine type-checks the
+    /// pipeline input before a command runs, so only a failing stream reaches this code.
+    mod input_value {
+        use super::*;
+
+        #[rstest]
+        fn reports_a_failing_input_stream_as_invalid_input() -> Result<(), TestError> {
+            let span = Span::test_data();
+
+            let failure = Value::error(
+                ShellError::NushellFailed {
+                    msg: UPSTREAM_FAILURE.to_owned(),
+                },
+                span,
+            );
+
+            let input = ListStream::new(iter::once(failure), span, Signals::empty()).into();
+
+            let err = input_value(input, span)
+                .err()
+                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+            assert_matches!(&err, CommandError::InvalidInput { .. });
+
+            assert_eq!(
+                err.into_labeled(span).code.as_deref(),
+                Some(INVALID_INPUT_CODE)
+            );
+
+            Ok(())
+        }
+    }
+
+    /// Handle acquisition: a handle whose repository is gone or cannot be reopened is reported at the
+    /// span of the value that carried it; other git-layer failures pass through unchanged.
+    mod acquire_handle {
+        use super::*;
+
+        const HANDLE_SPAN: Span = Span { start: 30, end: 36 };
+        const OTHER_REF: &str = "refs/heads/main";
+
+        /// The handle `gix open` returns for the repository at `path`, registered in `registry`.
+        fn handle_for(registry: &Registry, path: &Path) -> Result<Repository, GixError> {
+            let (id, location) = registry.discover_and_register(path)?;
+
+            Ok(Repository::new(id, location))
+        }
+
+        mod deleted_repository {
+            use super::*;
+
+            #[rstest]
+            fn reports_the_handle_span(
+                test_repo: Result<TestRepo, FixtureError>,
+            ) -> Result<(), TestError> {
+                let repo = test_repo?;
+                let registry = Registry::new();
+                let handle = handle_for(&registry, repo.path())?;
+
+                fs::remove_dir_all(repo.path())?;
+
+                let err = acquire_handle(&registry, &handle, HANDLE_SPAN)
+                    .err()
+                    .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+                assert_matches!(
+                    &err,
+                    CommandError::HandleRepositoryGone { span, .. } if *span == HANDLE_SPAN,
+                    "got {err:?}"
+                );
+
+                Ok(())
+            }
+        }
+
+        mod unopenable_rebuild {
+            use super::*;
+
+            #[rstest]
+            fn reports_the_handle_span(
+                test_repo: Result<TestRepo, FixtureError>,
+            ) -> Result<(), TestError> {
+                let repo = test_repo?;
+                let handle = handle_for(&Registry::new(), repo.path())?;
+
+                // A fresh registry must rebuild the repository, which fails without its HEAD file.
+                fs::remove_file(handle.git_dir.join(HEAD_FILE))?;
+
+                let err = acquire_handle(&Registry::new(), &handle, HANDLE_SPAN)
+                    .err()
+                    .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+                assert_matches!(
+                    &err,
+                    CommandError::HandleOpenFailed { span, .. } if *span == HANDLE_SPAN,
+                    "got {err:?}"
+                );
+
+                Ok(())
+            }
+        }
+
+        mod other_failures {
+            use super::*;
+
+            #[rstest]
+            fn pass_through_as_git_errors() {
+                let err = handle_failure(
+                    GixError::UnbornHead {
+                        name: OTHER_REF.to_owned(),
+                    },
+                    HANDLE_SPAN,
+                );
+
+                assert_matches!(
+                    &err,
+                    CommandError::Git(GixError::UnbornHead { .. }),
+                    "got {err:?}"
+                );
+            }
+        }
+    }
+
+    /// Spans of arguments: the argument's own span when present, the call's span when not.
+    mod argument_span {
+        use super::*;
+
+        #[rstest]
+        fn returns_the_span_of_a_present_argument() {
+            let call = EvaluatedCall::new(CALL_SPAN)
+                .with_positional(Value::string(PRESENT_VALUE, ARGUMENT_SPAN));
+
+            assert_eq!(argument_span(&call, FIRST_POSITION), ARGUMENT_SPAN);
+        }
+
+        #[rstest]
+        #[case::first(FIRST_POSITION)]
+        #[case::second(SECOND_POSITION)]
+        fn falls_back_to_the_call_span_when_the_argument_is_missing(#[case] position: usize) {
+            let call = EvaluatedCall::new(CALL_SPAN);
+
+            assert_eq!(argument_span(&call, position), CALL_SPAN);
+        }
+    }
+
+    /// Positional reads: a missing argument points at the call, an unreadable one at its value.
+    mod positional_arg {
+        use super::*;
+
+        #[rstest]
+        fn reads_a_present_argument_with_its_span() -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN)
+                .with_positional(Value::string(PRESENT_VALUE, ARGUMENT_SPAN));
+
+            let arg = positional_arg::<String>(&call, FIRST_POSITION)?;
+
+            assert_eq!(arg.item, PRESENT_VALUE);
+            assert_eq!(arg.span, ARGUMENT_SPAN);
 
             Ok(())
         }
 
         #[rstest]
-        #[case::int(Value::int(1, Span::test_data()), "int")]
-        #[case::string(Value::string("x", Span::test_data()), "string")]
-        fn rejects_other_values(#[case] input: Value, #[case] got: &str) -> Result<(), TestError> {
-            let err = handle_from::<Repository>(&input)
+        #[case::first(FIRST_POSITION)]
+        #[case::second(SECOND_POSITION)]
+        fn reports_a_missing_argument_at_the_call(
+            #[case] position: usize,
+        ) -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN);
+
+            let err = positional_arg::<String>(&call, position)
                 .err()
                 .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
 
-            assert!(matches!(&err, CommandError::WrongInput(w) if w.got == got));
+            assert_matches!(&err, CommandError::InvalidArgument { span, .. } if *span == CALL_SPAN);
+
+            assert_eq!(
+                err.into_labeled(Span::test_data()).code.as_deref(),
+                Some(INVALID_ARGUMENT_CODE)
+            );
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn reports_an_unreadable_argument_at_its_value() -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN)
+                .with_positional(Value::int(UNREADABLE_VALUE, ARGUMENT_SPAN));
+
+            let err = positional_arg::<String>(&call, FIRST_POSITION)
+                .err()
+                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+            assert_matches!(&err, CommandError::InvalidArgument { span, .. } if *span == ARGUMENT_SPAN);
+
+            assert_eq!(
+                err.into_labeled(Span::test_data()).code.as_deref(),
+                Some(INVALID_ARGUMENT_CODE)
+            );
+
+            Ok(())
+        }
+    }
+
+    /// Flag reads: an absent flag is `None`, an unreadable one points at the flag.
+    mod flag_arg {
+        use super::*;
+
+        #[rstest]
+        fn reads_an_absent_flag_as_none() -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN);
+            let flag = flag_arg::<String>(&call, EXPECT_FLAG)?;
+
+            assert!(flag.is_none(), "got {flag:?}");
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn reads_a_present_flag_as_its_value() -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN).with_named(
+                Spanned {
+                    item: EXPECT_FLAG,
+                    span: FLAG_SPAN,
+                },
+                Value::string(PRESENT_VALUE, ARGUMENT_SPAN),
+            );
+
+            let flag = flag_arg::<String>(&call, EXPECT_FLAG)?
+                .ok_or_else(|| TestError::Failure("expected a flag value".to_owned()))?;
+
+            assert_eq!(flag.item, PRESENT_VALUE);
+
+            Ok(())
+        }
+
+        #[rstest]
+        #[case::expect(EXPECT_FLAG)]
+        #[case::message(MESSAGE_FLAG)]
+        fn reports_an_unreadable_flag_as_invalid_argument_at_the_flag(
+            #[case] flag: &str,
+        ) -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN).with_named(
+                Spanned {
+                    item: flag,
+                    span: FLAG_SPAN,
+                },
+                Value::int(UNREADABLE_VALUE, Span::test_data()),
+            );
+
+            let err = flag_arg::<String>(&call, flag)
+                .err()
+                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+            assert_matches!(&err, CommandError::InvalidArgument { span, .. } if *span == FLAG_SPAN);
+
+            assert_eq!(
+                err.into_labeled(Span::test_data()).code.as_deref(),
+                Some(INVALID_ARGUMENT_CODE)
+            );
 
             Ok(())
         }
