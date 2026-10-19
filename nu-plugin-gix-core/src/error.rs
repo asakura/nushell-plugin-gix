@@ -27,14 +27,16 @@ pub enum GixError {
         source: gix::Error,
     },
 
-    /// The git directory of an opened repository no longer exists.
+    /// The repository is no longer at its location: its git directory or worktree is gone, or the
+    /// path now holds a different repository.
     #[error("git repository at '{}' was moved or deleted", git_dir.display())]
     RepositoryGone {
         /// The git directory that disappeared.
         git_dir: PathBuf,
     },
 
-    /// HEAD does not point at a commit (e.g. an empty repository).
+    /// HEAD could not be read or peeled to an object id. An unborn branch is reported as
+    /// [`GixError::UnbornHead`] instead.
     #[error("could not resolve HEAD")]
     Head(#[source] gix::Error),
 
