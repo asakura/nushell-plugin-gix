@@ -283,15 +283,24 @@ impl ForkedTestRepo {
 
 /// Initialises a repository in `dir` with the isolated open options, so the result does not depend
 /// on the user's or the system's git configuration.
+///
+/// Also writes the fixture committer into the repository's configuration, so reflog writes work without any
+/// user identity. The returned handle is reopened afterwards, because the configuration snapshot taken by
+/// `init_opts` predates that write.
 fn init_isolated(dir: &Path, kind: create::Kind) -> Result<gix::Repository, FixtureError> {
     let repo = gix::ThreadSafeRepository::init_opts(
         dir,
         kind,
         create::Options::default(),
         open::Options::isolated(),
-    )?;
+    )?
+    .to_thread_local();
 
-    Ok(repo.to_thread_local())
+    add_committer_identity(repo.git_dir())?;
+
+    let reopened = gix::ThreadSafeRepository::open_opts(repo.git_dir(), open::Options::isolated())?;
+
+    Ok(reopened.to_thread_local())
 }
 
 /// Points `HEAD` of `repo` at the full branch name `branch`, pinning the unborn branch name whatever `init.defaultBranch`
@@ -307,16 +316,37 @@ fn point_head_at(repo: &gix::Repository, branch: &str) -> Result<(), FixtureErro
     Ok(())
 }
 
-/// Appends the fixture committer to the configuration of the repository in `dir`, keeping the `init` settings.
+/// Appends the fixture committer to the configuration in the git directory `git_dir`, keeping the `init` settings.
 ///
 /// Git refuses to write a reflog without a committer, and the isolated options ignore the user's identity, so the
-/// repository carries its own. Writing the identity into the local configuration keeps the fixture hermetic.
-fn add_committer_identity(dir: &Path) -> Result<(), FixtureError> {
-    let config = dir.join(GIT_DIR).join(CONFIG_FILE);
+/// repository carries its own. `git_dir` is the repository's git directory (`repo.git_dir()`), which is `dir/.git`
+/// for a worktree and `dir` itself for a bare repository.
+fn add_committer_identity(git_dir: &Path) -> Result<(), FixtureError> {
+    let config = git_dir.join(CONFIG_FILE);
     let mut file = fs::OpenOptions::new().append(true).open(config)?;
+
     let identity =
         format!("{USER_SECTION}\n\tname = {COMMITTER_NAME}\n\temail = {COMMITTER_EMAIL}\n");
+
     file.write_all(identity.as_bytes())?;
+
+    Ok(())
+}
+
+/// Removes the fixture committer from the worktree repository in `dir`, so that git cannot write a reflog there.
+///
+/// # Errors
+///
+/// Returns [`FixtureError::Io`] when the configuration cannot be read or written.
+pub fn remove_committer_identity(dir: &Path) -> Result<(), FixtureError> {
+    let config = dir.join(GIT_DIR).join(CONFIG_FILE);
+    let text = fs::read_to_string(&config)?;
+
+    let kept = text
+        .split_once(USER_SECTION)
+        .map_or(text.as_str(), |(head, _)| head);
+
+    fs::write(config, kept)?;
 
     Ok(())
 }
@@ -329,6 +359,7 @@ fn add_committer_identity(dir: &Path) -> Result<(), FixtureError> {
 pub fn unborn_repo() -> Result<UnbornTestRepo, FixtureError> {
     let dir = TempDir::new()?;
     let repo = init_isolated(dir.path(), create::Kind::WithWorktree)?;
+
     point_head_at(&repo, MAIN_BRANCH)?;
 
     Ok(UnbornTestRepo { dir })
@@ -342,6 +373,7 @@ pub fn unborn_repo() -> Result<UnbornTestRepo, FixtureError> {
 pub fn bare_repo() -> Result<UnbornTestRepo, FixtureError> {
     let dir = TempDir::new()?;
     let repo = init_isolated(dir.path(), create::Kind::Bare)?;
+
     point_head_at(&repo, MAIN_BRANCH)?;
 
     Ok(UnbornTestRepo { dir })
@@ -524,7 +556,6 @@ impl TaggedTestRepo {
 pub fn tagged_repo() -> Result<TaggedTestRepo, FixtureError> {
     let dir = TempDir::new()?;
     let repo = init_isolated(dir.path(), create::Kind::WithWorktree)?;
-    add_committer_identity(dir.path())?;
     point_head_at(&repo, FEATURE_BRANCH_REF)?;
 
     // `empty_tree()` is virtual and never reaches the object database, so write it once. The
