@@ -16,6 +16,7 @@ mod error;
 #[cfg(test)]
 mod fixtures;
 mod log;
+mod refs;
 mod registry;
 mod repository;
 mod rev;
@@ -24,6 +25,7 @@ mod side;
 pub use self::{
     error::GixError,
     log::{CommitInfo, log},
+    refs::{HeadInfo, RefExpect, RefInfo, RefTarget, head, list, set},
     registry::Registry,
     repository::{OpenRepository, RepositoryLocation},
     rev::{RevInfo, RevKind, resolve},

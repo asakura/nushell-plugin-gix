@@ -1,5 +1,5 @@
 [package]
-name = "nu_plugin_gix"
+name = "nu-plugin-gix"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
