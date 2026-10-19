@@ -268,9 +268,10 @@ mod tests {
             let fixture = tagged_repo?;
             let repo = open_fixture(&fixture)?;
             let info = resolve(&repo, HEAD, None)?;
+            let oid = fixture.commit.to_string();
 
             assert!(
-                fixture.commit.to_string().starts_with(&info.short),
+                oid.starts_with(&info.short),
                 "short `{}` is not a prefix of `{oid}`",
                 info.short
             );
