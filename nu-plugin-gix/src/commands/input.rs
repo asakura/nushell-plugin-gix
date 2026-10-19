@@ -63,6 +63,24 @@ pub fn input_value(input: PipelineData, span: Span) -> Result<Value, CommandErro
         })
 }
 
+/// The span of the positional argument at `position`, or of the call when it is missing.
+#[must_use = "the span locates the argument in an error; discarding it reports nothing"]
+pub fn argument_span(call: &EvaluatedCall, position: usize) -> Span {
+    call.nth(position).map_or(call.head, |value| value.span())
+}
+
+/// Reads the required positional argument at `position`; a read failure points at the argument, or at the call when it is missing.
+pub fn positional_arg<T>(call: &EvaluatedCall, position: usize) -> Result<Spanned<T>, CommandError>
+where
+    T: FromValue,
+{
+    call.req::<Spanned<T>>(position)
+        .map_err(|source| CommandError::InvalidArgument {
+            source: Box::new(source),
+            span: argument_span(call, position),
+        })
+}
+
 /// Reads the optional flag `flag`; a read failure points at the flag.
 pub fn flag_arg<T>(call: &EvaluatedCall, flag: &str) -> Result<Option<Spanned<T>>, CommandError>
 where

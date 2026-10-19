@@ -48,6 +48,7 @@ impl Plugin for GixPlugin {
             Box::new(commands::Gix),
             Box::new(commands::Open),
             Box::new(commands::Log),
+            Box::new(commands::Rev),
         ]
     }
 
