@@ -49,6 +49,10 @@ impl Plugin for GixPlugin {
             Box::new(commands::Open),
             Box::new(commands::Log),
             Box::new(commands::Rev),
+            Box::new(commands::Ref),
+            Box::new(commands::RefHead),
+            Box::new(commands::RefList),
+            Box::new(commands::RefSet),
         ]
     }
 

@@ -1,5 +1,7 @@
 //! Error type for the git layer; knows nothing about Nushell.
 
+use crate::refs::{RefExpect, RefTarget};
+
 use std::{io, path::PathBuf};
 
 /// Errors produced while opening a repository or reading its history.
@@ -86,6 +88,59 @@ pub enum GixError {
     UnbornHead {
         /// Full name of the unborn branch.
         name: String,
+    },
+
+    /// Reading a reference or the reference list failed.
+    #[error("could not read references")]
+    RefRead(#[source] gix::Error),
+
+    /// A symbolic reference chain is broken: it never reaches an object id.
+    #[error(
+        "reference '{name}' never resolves to an object; its symbolic chain is broken or too deep"
+    )]
+    DanglingRef {
+        /// Full name of the reference that could not be resolved.
+        name: String,
+    },
+
+    /// A compare-and-swap reference update failed because the reference moved concurrently.
+    #[error(
+        "reference '{name}' moved concurrently: expected {expected}, but found {}",
+        .actual.as_ref().map_or(RefExpect::MISSING, RefTarget::spelled)
+    )]
+    RefMoved {
+        /// Full name of the reference.
+        name: String,
+        /// The value the update required the reference to hold.
+        expected: RefExpect,
+        /// What the reference actually holds; `None` when it does not exist.
+        actual: Option<RefTarget>,
+    },
+
+    /// Writing a reference failed after its value agreed with the expectation.
+    #[error("could not update reference '{name}'")]
+    RefUpdate {
+        /// Full name of the reference.
+        name: String,
+        /// The underlying `gix` error.
+        #[source]
+        source: gix::Error,
+    },
+
+    /// A value that should be an object id is not one.
+    #[error("'{value}' is not a valid object id")]
+    InvalidOid {
+        /// The value as written.
+        value: String,
+    },
+
+    /// A reference name is not a valid full git reference name.
+    #[error("'{name}' is not a valid reference name: {detail}")]
+    InvalidRefName {
+        /// The name as written.
+        name: String,
+        /// Why the name was rejected.
+        detail: String,
     },
 
     /// A requested short object id length is out of range.

@@ -2379,6 +2379,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "nu-plugin-gix"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "gix",
+ "miette",
+ "nu-plugin",
+ "nu-plugin-gix-core",
+ "nu-plugin-gix-testing-support",
+ "nu-plugin-test-support",
+ "nu-protocol",
+ "rstest",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
+ "typetag",
+]
+
+[[package]]
 name = "nu-plugin-gix-core"
 version = "0.1.0"
 dependencies = [
@@ -2523,25 +2542,6 @@ dependencies = [
  "sys-locale",
  "unicase",
  "web-time",
-]
-
-[[package]]
-name = "nu_plugin_gix"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "gix",
- "miette",
- "nu-plugin",
- "nu-plugin-gix-core",
- "nu-plugin-gix-testing-support",
- "nu-plugin-test-support",
- "nu-protocol",
- "rstest",
- "serde",
- "tempfile",
- "thiserror 2.0.21",
- "typetag",
 ]
 
 [[package]]
