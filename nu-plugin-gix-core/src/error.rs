@@ -46,6 +46,16 @@ pub enum GixError {
         source: gix::Error,
     },
 
+    /// A resolved object id could not be shortened because its object could not be read.
+    #[error("could not shorten the object id of revision '{expression}'")]
+    Shorten {
+        /// The revision expression as written.
+        expression: String,
+        /// The underlying `gix` error.
+        #[source]
+        source: gix::Error,
+    },
+
     /// Setting up or running the revision walk failed.
     #[error("revision walk failed")]
     Walk(#[source] gix::Error),
@@ -76,5 +86,14 @@ pub enum GixError {
     UnbornHead {
         /// Full name of the unborn branch.
         name: String,
+    },
+
+    /// A requested short object id length is out of range.
+    #[error("invalid short length {len}: {detail}")]
+    ShortLen {
+        /// The requested length in hexadecimal characters.
+        len: usize,
+        /// Why the length was rejected.
+        detail: String,
     },
 }

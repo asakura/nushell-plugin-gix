@@ -13,9 +13,12 @@
 )]
 
 mod error;
+#[cfg(test)]
+mod fixtures;
 mod log;
 mod registry;
 mod repository;
+mod rev;
 mod side;
 
 pub use self::{
@@ -23,5 +26,6 @@ pub use self::{
     log::{CommitInfo, log},
     registry::Registry,
     repository::{OpenRepository, RepositoryLocation},
+    rev::{RevInfo, RevKind, resolve},
     side::{ResolvedRevision, Side},
 };

@@ -26,6 +26,7 @@ const IO_CODE: &str = "gix::io";
 const WRONG_INPUT_CODE: &str = "gix::wrong-input";
 const NEGATIVE_LIMIT_CODE: &str = "gix::negative-limit";
 const INVALID_SIDE_CODE: &str = "gix::invalid-side";
+const INVALID_SHORT_LEN_CODE: &str = "gix::invalid-short-len";
 const UNBORN_HEAD_CODE: &str = "gix::unborn-head";
 
 /// Every stable code an error of this plugin can carry.
@@ -47,10 +48,14 @@ const ALL_CODES: &[&str] = &[
     WRONG_INPUT_CODE,
     NEGATIVE_LIMIT_CODE,
     INVALID_SIDE_CODE,
+    INVALID_SHORT_LEN_CODE,
     UNBORN_HEAD_CODE,
 ];
 
 const INVALID_SIDE_LABEL: &str = "invalid side";
+const UNRESOLVED_REVISION_LABEL: &str = "this revision does not resolve in the repository";
+const UNSHORTENABLE_REVISION_LABEL: &str = "the object this revision names could not be read";
+const SHORT_LEN_OUT_OF_RANGE_LABEL: &str = "this short length is out of range";
 
 /// Label for a repository that was found but cannot be opened.
 const UNOPENABLE_LABEL: &str =
@@ -75,6 +80,17 @@ pub enum CommandError {
     /// The git layer failed.
     #[error(transparent)]
     Git(#[from] GixError),
+
+    /// The git layer rejected an argument: a revision it could not resolve or shorten, or a short
+    /// length out of range.
+    #[error("{source}")]
+    Located {
+        /// Span of the argument the failure is attributed to, chosen by the command that raised it.
+        span: Span,
+        /// The underlying git-layer failure.
+        #[source]
+        source: GixError,
+    },
 
     /// The path given to `--repo` is not inside a git repository.
     #[error("'{}' is not inside a git repository", path.display())]
@@ -177,6 +193,15 @@ pub enum CommandError {
         span: Span,
     },
 
+    /// A negative value was given for the short object id length.
+    #[error("short length must not be negative, got {len}")]
+    NegativeShortLen {
+        /// The negative length as written.
+        len: i64,
+        /// Span of the short length value.
+        span: Span,
+    },
+
     /// A side must be a string or a record.
     #[error("a side must be a string or a record, got {got}")]
     InvalidSideType {
@@ -235,9 +260,11 @@ impl CommandError {
             Self::NotARepository { source: found, .. }
             | Self::OpenFailed { source: found, .. }
             | Self::HandleRepositoryGone { source: found, .. }
-            | Self::HandleOpenFailed { source: found, .. } => found.source(),
+            | Self::HandleOpenFailed { source: found, .. }
+            | Self::Located { source: found, .. } => found.source(),
             Self::Git(_)
             | Self::NegativeLimit { .. }
+            | Self::NegativeShortLen { .. }
             | Self::WrongInput(_)
             | Self::InvalidSideType { .. }
             | Self::EmptyRevision { .. }
@@ -312,6 +339,8 @@ impl CommandError {
             Self::HandleRepositoryGone { .. } => Some(REPOSITORY_GONE_CODE),
             Self::WrongInput(_) => Some(WRONG_INPUT_CODE),
             Self::NegativeLimit { .. } => Some(NEGATIVE_LIMIT_CODE),
+            Self::NegativeShortLen { .. } => Some(INVALID_SHORT_LEN_CODE),
+            Self::Located { source, .. } => git_code(source),
             Self::InvalidSideType { .. }
             | Self::InvalidSideRecord { .. }
             | Self::InvalidSideField { .. } => Some(INVALID_SIDE_CODE),
@@ -349,7 +378,9 @@ impl CommandError {
             | Self::InvalidInput { span, .. }
             | Self::HandleRepositoryGone { span, .. }
             | Self::HandleOpenFailed { span, .. }
-            | Self::NegativeLimit { span, .. } => Some(*span),
+            | Self::NegativeLimit { span, .. }
+            | Self::NegativeShortLen { span, .. }
+            | Self::Located { span, .. } => Some(*span),
             Self::Git(_) => None,
         }
     }
@@ -376,7 +407,9 @@ impl CommandError {
             Self::HandleOpenFailed { .. } => {
                 Some("this handle's repository can no longer be opened; it may be corrupt")
             }
-            Self::NegativeLimit { .. } => Some("expected a non-negative integer"),
+            Self::NegativeLimit { .. } | Self::NegativeShortLen { .. } => {
+                Some("expected a non-negative integer")
+            }
             Self::InvalidSideType { .. } => Some("use `head`, `index`, `worktree`, or a revision"),
             Self::EmptyRevision { .. } => Some("provide a non-empty revision expression"),
             Self::InvalidObjectId { .. } => {
@@ -396,6 +429,12 @@ impl CommandError {
                 "the repository is no longer at this location; run `gix open` again if it moved",
             ),
             Self::Git(GixError::Head(_)) => Some("the repository may have no commits yet"),
+            Self::Located { source, .. } => match source {
+                GixError::Revision { .. } => Some(UNRESOLVED_REVISION_LABEL),
+                GixError::Shorten { .. } => Some(UNSHORTENABLE_REVISION_LABEL),
+                GixError::ShortLen { .. } => Some(SHORT_LEN_OUT_OF_RANGE_LABEL),
+                _ => None,
+            },
             Self::WrongInput(_) | Self::Git(_) => None,
         }
     }
@@ -423,7 +462,9 @@ impl CommandError {
             | Self::HandleRepositoryGone { .. }
             | Self::HandleOpenFailed { .. }
             | Self::WrongInput(_)
-            | Self::NegativeLimit { .. } => None,
+            | Self::NegativeLimit { .. }
+            | Self::NegativeShortLen { .. }
+            | Self::Located { .. } => None,
         }
     }
 }
@@ -440,7 +481,10 @@ const fn git_code(error: &GixError) -> Option<&'static str> {
         GixError::NotFound { .. } => Some(NOT_A_REPOSITORY_CODE),
         GixError::Open { .. } => Some(OPEN_FAILED_CODE),
         GixError::RepositoryGone { .. } => None,
-        GixError::Head(_) | GixError::Revision { .. } => Some(BAD_REVISION_CODE),
+        GixError::Head(_) | GixError::Revision { .. } | GixError::Shorten { .. } => {
+            Some(BAD_REVISION_CODE)
+        }
+        GixError::ShortLen { .. } => Some(INVALID_SHORT_LEN_CODE),
         GixError::Walk(_) => Some(WALK_FAILED_CODE),
         GixError::Commit { .. } => Some(COMMIT_UNREADABLE_CODE),
         GixError::Timestamp { .. } => Some(BAD_TIMESTAMP_CODE),
