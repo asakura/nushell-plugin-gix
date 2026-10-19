@@ -350,7 +350,8 @@ mod tests {
     use gix::refs::transaction::{PreviousValue, RefEdit};
     use nu_plugin_gix_testing_support::{
         ANNOTATED_TAG_REF, FEATURE_BRANCH_REF, FIXTURE_REFLOG_MESSAGE, FixtureError, GIT_DIR,
-        LIGHT_TAG_REF, MAIN_BRANCH, TaggedTestRepo, UnbornTestRepo, tagged_repo, unborn_repo,
+        LIGHT_TAG_REF, MAIN_BRANCH, TaggedTestRepo, UnbornTestRepo, remove_committer_identity,
+        tagged_repo, unborn_repo,
     };
     use rstest::rstest;
 
@@ -1054,10 +1055,11 @@ mod tests {
         ) -> Result<(), TestError> {
             const OID_HEX: &str = "0123456789abcdef0123456789abcdef01234567";
 
-            let opened = OpenRepository::from_repository(gix::open_opts(
-                unborn_repo?.path(),
-                Options::isolated(),
-            )?);
+            let repo = unborn_repo?;
+            remove_committer_identity(repo.path())?;
+
+            let opened =
+                OpenRepository::from_repository(gix::open_opts(repo.path(), Options::isolated())?);
 
             let err = set(&opened, NEW_NAME, OID_HEX, RefExpect::Missing, SET_MESSAGE)
                 .err()
