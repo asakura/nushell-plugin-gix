@@ -42,10 +42,20 @@ gix     = "enable only the gix features actually used (Cargo.toml lists them exp
 [tests]
 structure = "nested submods per type/fn; each opens use super::*; never flat"
 attrs     = "#[rstest] always; #[case::snake_name] mandatory (bare #[case] forbidden); redundant_test_prefix denied"
-sig       = "Result<(),TestError>+?; no unwrap in test body; assert_matches!; 1 behavior/test"
+sig       = "Result<(),TestError>+?; no unwrap in test body; assert_matches!; 1 behavior/test; when TestError is too large for the stack (clippy result_large_err), return Result<(),Box<TestError>> with a From impl per foreign error — heap boxing is fine"
+assert_helpers = "test assertion helpers that take a row/value and check it are macro_rules! macros named assert_*! (like assert!/assert_eq!), not fns returning Result: a failure reports the calling test's line and `?` propagates from the caller; define the macro before first use inside mod tests (or in nu-plugin-gix-testing-support with #[macro_export] when shared)"
 testerror = "thiserror per mod tests; always include Failure(String) variant; #[from] for every foreign error; never reuse domain errors"
 data      = "file fixtures → tests/fixtures/<scenario-name>/, committed; name describes the scenario; inline for <10 lines"
 isolation = "filesystem mutations → tempfile::TempDir via rstest #[fixture]; git repos under test are created in a TempDir, never the working repo; env-var mutations → serial + restore in fixture Drop"
+# What to test, and where. Rules 1-8 draw the unit-test boundary.
+external  = "1: never test std, third-party crates or the Nushell engine (input-type checks, flag parsing, try_from, Iterator adapters): a failure there is not our bug and only breaks on a dependency bump"
+owner     = "2: a test of a crate's own behavior lives in that crate (ordering, limits, unborn HEAD, registry rebuild → nu-plugin-gix-core); src/commands never re-proves git-side behavior"
+one_layer = "3: each behavior is tested at exactly one layer; the error code, label and span mapping of CommandError is asserted once in commands/error.rs, not per command"
+smoke     = "4: command tests are slim smoke tests that the wiring exists (a forgotten conversion/function/registration fails them): registration + signature, one happy path with the documented columns present, one error path per raisable variant that surfaces as a LabeledError with a code; messages: assert non-empty or containing the key fact, never exact text; spans: assert they are plausible (inside the input, on the argument), never exact offsets or arithmetic; no ordering assertions; every flag or argument the command forwards to the git side gets one smoke test showing its value arrives (e.g. --limit 1 yields one row, --message lands in the reflog), because parse tests and git-side tests cannot catch a dropped forward; registration is checked against a hardcoded list of expected command names, never against the plugin's own list"
+mapping   = "5: prefer a unit test on the mapping fn (build the domain value, call commit_value) over an end-to-end test with a real repository; keep one end-to-end smoke test per command"
+merge     = "6: tests that differ only in the property asserted are one test (message, code, label and span of one error are one behavior)"
+impossible = "7: no test for a case the type system already excludes (see [antirot] no-defensive-impossible)"
+support   = "8: generalize test helpers (row/column access, coded-error and span assertions, eval-against-repo, TestError plumbing) and put them in nu-plugin-gix-testing-support instead of defining them in a command's mod tests; the crate holds helpers and fixtures, never assertions about one command, and stays a dev-dependency"
 
 [docs]
 all      = "//! every module; one sentence for leaf modules (error.rs, types.rs)"
