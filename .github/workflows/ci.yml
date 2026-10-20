@@ -22,12 +22,13 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@v23
 
       # Caches locally built store paths (the rust-overlay toolchain, the
-      # git-hooks config) in the GitHub Actions cache; anything already on
-      # cache.nixos.org is still fetched from there.
-      - uses: DeterminateSystems/magic-nix-cache-action@v15
+      # git-hooks config) in the GitHub Actions cache, deduplicated across runs by hestia;
+      # anything already on cache.nixos.org is fetched from there and never
+      # re-cached (upstream-cache-filter).
+      - uses: Mic92/hestia@v3
 
         with:
-          use-flakehub: false
+          upstream-cache-filter: true
 
       # The toolchain comes from the flake, but rust-cache only sees the
       # runner's preinstalled rustc, so flake.lock is keyed in explicitly:
@@ -66,7 +67,7 @@ jobs:
 
   # Builds the static release binaries on every push to main so their store
   # paths (crane's dependency-only artifacts in particular) land in main's
-  # magic-nix-cache. Release runs are scoped to their tag and can only read
+  # the hestia cache. Release runs are scoped to their tag and can only read
   # caches written on the default branch, so without this every release
   # would rebuild the whole dependency tree twice from scratch.
   release-build:
@@ -84,10 +85,10 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@v23
 
-      - uses: DeterminateSystems/magic-nix-cache-action@v15
+      - uses: Mic92/hestia@v3
 
         with:
-          use-flakehub: false
+          upstream-cache-filter: true
 
       - name: nix build
         run: nix build ".#${{ matrix.package }}" -L

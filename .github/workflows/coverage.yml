@@ -22,10 +22,10 @@ jobs:
 
       - uses: DeterminateSystems/nix-installer-action@v23
 
-      - uses: DeterminateSystems/magic-nix-cache-action@v15
+      - uses: Mic92/hestia@v3
 
         with:
-          use-flakehub: false
+          upstream-cache-filter: true
 
       # flake.lock is keyed in because rust-cache only sees the runner's
       # rustc, not the flake's toolchain (see ci.yml).

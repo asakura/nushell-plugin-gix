@@ -1,0 +1,41 @@
+name: Cache GC
+
+# Prunes the hestia cache: the default-branch scope grows forever otherwise.
+# Runs must not overlap, so manual runs queue behind the nightly one.
+concurrency:
+  group: hestia-gc
+  cancel-in-progress: false
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Plan only; do not repack, touch, or delete anything.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  gc:
+    runs-on: ubuntu-latest
+    permissions:
+      # REST cache deletes need actions:write.
+      actions: write
+      contents: read
+    steps:
+      - uses: DeterminateSystems/nix-installer-action@v23
+
+      # Empty version = token-capture-only mode: exports the cache API tokens
+      # GC needs without starting the daemon.
+      - uses: Mic92/hestia@v3
+        with:
+          version: ""
+
+      - name: Run garbage collection
+        run: nix run github:Mic92/hestia/v3 -- gc ${{ inputs.dry-run && '--dry-run' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
