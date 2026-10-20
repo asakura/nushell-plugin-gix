@@ -2,7 +2,7 @@
 
 use crate::refs::{RefExpect, RefTarget};
 
-use std::{io, path::PathBuf};
+use std::{io, path::PathBuf, string::FromUtf8Error};
 
 /// Errors produced while opening a repository or reading its history.
 #[derive(Debug, thiserror::Error)]
@@ -189,5 +189,22 @@ pub enum GixError {
         len: usize,
         /// Why the length was rejected.
         detail: String,
+    },
+
+    /// A configuration key is not of the form `section.name` or `section.subsection.name`.
+    #[error("'{key}' is not a valid configuration key")]
+    InvalidConfigKey {
+        /// The key as written.
+        key: String,
+    },
+
+    /// The value of a configuration key is not valid UTF-8.
+    #[error("the value of configuration key '{key}' is not valid UTF-8")]
+    ConfigValueNotUtf8 {
+        /// The key as written.
+        key: String,
+        /// The decoding failure.
+        #[source]
+        source: FromUtf8Error,
     },
 }
