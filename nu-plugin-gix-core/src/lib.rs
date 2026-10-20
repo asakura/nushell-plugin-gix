@@ -26,7 +26,9 @@ mod side;
 pub use gix::pathspec::Pattern;
 
 pub use self::{
-    config::{config_get, validate_config_key},
+    config::{
+        ConfigType, ConfigValue, config_get, config_get_auto, config_get_typed, validate_config_key,
+    },
     error::GixError,
     log::{
         CommitInfo, CommitLog, FileChange, FileChangeKind, FileStat, LogSettings, LogStart,
