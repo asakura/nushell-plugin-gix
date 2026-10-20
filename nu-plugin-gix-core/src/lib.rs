@@ -22,9 +22,14 @@ mod repository;
 mod rev;
 mod side;
 
+pub use gix::pathspec::Pattern;
+
 pub use self::{
     error::GixError,
-    log::{CommitInfo, log},
+    log::{
+        CommitInfo, CommitLog, FileChange, FileChangeKind, FileStat, LogSettings, LogStart,
+        Mailmap, SignatureInfo, log, pathspec,
+    },
     refs::{HeadInfo, RefExpect, RefInfo, RefTarget, head, list, set},
     registry::Registry,
     repository::{OpenRepository, RepositoryLocation},
