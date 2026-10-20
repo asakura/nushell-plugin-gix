@@ -27,9 +27,10 @@ pub use gix::pathspec::Pattern;
 
 pub use self::{
     config::{
-        ConfigType, ConfigValue, config_get, config_get_auto, config_get_typed, validate_config_key,
+        Config, ConfigKey, ConfigType, ConfigValue, GroupPath, Occurrence, Origin, PathContext,
+        RawValue, ScalarType, SectionName, Subsection, VariableName, convert, convert_path,
     },
-    error::GixError,
+    error::{GixError, SectionFault},
     log::{
         CommitInfo, CommitLog, FileChange, FileChangeKind, FileStat, LogSettings, LogStart,
         Mailmap, SignatureInfo, log, pathspec,

@@ -1,9 +1,11 @@
 //! Error type for the git layer; knows nothing about Nushell.
 
-use crate::config::ConfigType;
+use crate::config::{ConfigKey, ConfigType, GroupPath, Origin, SectionName, VariableName};
 use crate::refs::{RefExpect, RefTarget};
 
-use std::{io, path::PathBuf, string::FromUtf8Error};
+use gix::config::parse::Error as ParseError;
+
+use std::{io, path::PathBuf, str::Utf8Error, sync::Arc};
 
 /// Errors produced while opening a repository or reading its history.
 #[derive(Debug, thiserror::Error)]
@@ -200,31 +202,301 @@ pub enum GixError {
     },
 
     /// The value of a configuration key is not valid UTF-8.
-    #[error("the value of configuration key '{key}' is not valid UTF-8")]
+    #[error("the value of configuration key '{key}' is not valid UTF-8 ({origin})")]
     ConfigValueNotUtf8 {
-        /// The key as written.
-        key: String,
+        /// The key that was read.
+        key: ConfigKey,
         /// The decoding failure.
         #[source]
-        source: FromUtf8Error,
+        source: Utf8Error,
+        /// Where the value was read from.
+        origin: Arc<Origin>,
     },
 
     /// The value of a configuration key cannot be read as the requested type.
-    #[error("the value of configuration key '{key}' cannot be read as {kind}")]
+    #[error("the value of configuration key '{key}' cannot be read as {kind} ({origin})")]
     ConfigValueConversion {
-        /// The key as written.
-        key: String,
+        /// The key that was read.
+        key: ConfigKey,
         /// The type the value was read as.
         kind: ConfigType,
         /// The underlying `gix` error.
         #[source]
         source: gix::Error,
+        /// Where the value was read from.
+        origin: Arc<Origin>,
+    },
+
+    /// A configuration key has no value (it was written without `=`), but a value of the requested type was needed.
+    #[error("configuration key '{key}' has no value, but it was read as {kind} ({origin})")]
+    ConfigValueMissing {
+        /// The key that was read.
+        key: ConfigKey,
+        /// The type the value was needed as.
+        kind: ConfigType,
+        /// Where the valueless key was read from.
+        origin: Arc<Origin>,
+    },
+
+    /// A path uses `%(prefix)/` but the install directory of git, the directory of the running binary, could not be
+    /// determined.
+    #[error(
+        "the path of configuration key '{key}' uses %(prefix)/ but the install directory of git is unknown ({origin})"
+    )]
+    InstallDirUnavailable {
+        /// The key that was read.
+        key: ConfigKey,
+        /// Why the install directory could not be determined.
+        #[source]
+        source: Arc<gix::Error>,
+        /// Where the path was read from.
+        origin: Arc<Origin>,
     },
 
     /// The path in a configuration key is not valid UTF-8.
-    #[error("the path in configuration key '{key}' is not valid UTF-8")]
+    #[error("the path in configuration key '{key}' is not valid UTF-8 ({origin})")]
     ConfigPathNotUtf8 {
-        /// The key as written.
-        key: String,
+        /// The key that was read.
+        key: ConfigKey,
+        /// Where the path was read from.
+        origin: Arc<Origin>,
     },
+
+    /// The values of a list-valued configuration key were all removed by an empty value
+    /// (`name =`), so the key has no value.
+    #[error(
+        "configuration key '{key}' was reset ({origin}): an empty value removed all its values, so it has none"
+    )]
+    ConfigKeyReset {
+        /// The key that was read.
+        key: ConfigKey,
+        /// Where the emptying value was read from.
+        origin: Arc<Origin>,
+    },
+
+    /// The subsection of a configuration key is not valid UTF-8.
+    #[error("the subsection of configuration key '{key}' is not valid UTF-8 ({origin})")]
+    ConfigSubsectionNotUtf8 {
+        /// The key that was read; its subsection is the part that is not UTF-8.
+        key: ConfigKey,
+        /// The decoding failure.
+        #[source]
+        source: Utf8Error,
+        /// Where the key was read from.
+        origin: Arc<Origin>,
+    },
+
+    /// A variable and a subsection of the same name are both in one configuration section, so the section
+    /// cannot be read as one record.
+    #[error(
+        "configuration section '{section}' has both a variable named '{name}' ({variable_origin}) and a subsection named '{name}' ({subsection_origin})"
+    )]
+    ConfigNameClash {
+        /// The section both names belong to.
+        section: SectionName,
+        /// The name used twice: it is a variable of the section and the name of one of its subsections.
+        name: VariableName,
+        /// Where the variable's last occurrence was read from.
+        variable_origin: Arc<Origin>,
+        /// Where the first variable of the subsection that has a value (a variable removed by a reset is not emitted)
+        /// was read from.
+        subsection_origin: Arc<Origin>,
+    },
+
+    /// A configuration section could not be read back as its variable names and values, because its bytes
+    /// cannot be parsed again.
+    #[error("the variables of configuration section '{section}' could not be read")]
+    ConfigSectionUnreadable {
+        /// The section, with its subsection when it has one.
+        section: GroupPath,
+        /// The parse failure.
+        #[source]
+        source: ParseError,
+    },
+
+    /// The parse events of a configuration section broke the grammar gix guarantees, so a variable would be lost.
+    #[error("the variables of configuration section '{section}' could not be read: {fault}")]
+    ConfigSectionMalformed {
+        /// The section, with its subsection when it has one.
+        section: GroupPath,
+        /// The event that broke the grammar.
+        fault: SectionFault,
+    },
+}
+
+/// The parse events of one configuration section that break the grammar of a variable: a name followed by no value,
+/// or a value without a name.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SectionFault {
+    /// A variable name was started and no value event ended it: another name began, or the events of the section ended.
+    #[error("the variable '{0}' has no value")]
+    NameWithoutValue(VariableName),
+    /// A value event (`KeyValueSeparator`, `ValueNotDone`, `Value`, `ValueDone`) arrived with no variable name pending.
+    #[error("a value has no variable name")]
+    ValueWithoutName,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::{ScalarType, Subsection, VariableName};
+
+    use gix::config::Source;
+    use rstest::rstest;
+
+    use std::{error::Error as _, slice, str};
+
+    #[derive(thiserror::Error, Debug)]
+    enum TestError {
+        #[error("Test failure: {0}")]
+        Failure(String),
+    }
+
+    fn key() -> ConfigKey {
+        ConfigKey {
+            section: SectionName::new("core"),
+            subsection: None,
+            name: VariableName::new("bare"),
+        }
+    }
+
+    fn origin(path: &str) -> Origin {
+        Origin {
+            path: Some(PathBuf::from(path)),
+            source: Source::Local,
+        }
+    }
+
+    fn utf8_error() -> Result<Utf8Error, TestError> {
+        match str::from_utf8(slice::from_ref(&0xff_u8)) {
+            Ok(_) => Err(TestError::Failure("0xff decoded as UTF-8".to_owned())),
+            Err(error) => Ok(error),
+        }
+    }
+
+    mod config_messages {
+        use super::*;
+
+        #[rstest]
+        fn name_the_key_and_the_origin() -> Result<(), TestError> {
+            let errors = [
+                GixError::ConfigValueNotUtf8 {
+                    key: key(),
+                    source: utf8_error()?,
+                    origin: Arc::new(origin("/p/config")),
+                },
+                GixError::ConfigValueConversion {
+                    key: key(),
+                    kind: ConfigType::Scalar(ScalarType::Bool),
+                    source: gix::Error::from_error(io::Error::other("not a boolean")),
+                    origin: Arc::new(origin("/p/config")),
+                },
+                GixError::ConfigValueMissing {
+                    key: key(),
+                    kind: ConfigType::Scalar(ScalarType::Int),
+                    origin: Arc::new(origin("/p/config")),
+                },
+                GixError::ConfigPathNotUtf8 {
+                    key: key(),
+                    origin: Arc::new(origin("/p/config")),
+                },
+                GixError::ConfigKeyReset {
+                    key: key(),
+                    origin: Arc::new(origin("/p/config")),
+                },
+                GixError::ConfigSubsectionNotUtf8 {
+                    key: key(),
+                    source: utf8_error()?,
+                    origin: Arc::new(origin("/p/config")),
+                },
+            ];
+
+            for error in &errors {
+                let message = error.to_string();
+                assert!(message.contains("core.bare"), "{message}");
+                assert!(message.contains("in /p/config"), "{message}");
+            }
+            Ok(())
+        }
+
+        #[rstest]
+        fn valueless_names_the_kind() {
+            let error = GixError::ConfigValueMissing {
+                key: key(),
+                kind: ConfigType::Path,
+                origin: Arc::new(origin("/p/config")),
+            };
+
+            assert!(error.to_string().contains(&format!("{}", ConfigType::Path)));
+        }
+
+        #[rstest]
+        fn install_dir_unavailable_names_key_and_origin() {
+            let error = GixError::InstallDirUnavailable {
+                key: key(),
+                source: Arc::new(gix::Error::from_error(io::Error::other(
+                    "current_exe is unreadable",
+                ))),
+                origin: Arc::new(origin("/p/config")),
+            };
+            let message = error.to_string();
+
+            assert!(message.contains("core.bare"), "{message}");
+            assert!(message.contains("in /p/config"), "{message}");
+        }
+
+        #[rstest]
+        fn name_clash_names_section_name_and_both_origins() {
+            let error = GixError::ConfigNameClash {
+                section: SectionName::new("core"),
+                name: VariableName::new("bare"),
+                variable_origin: Arc::new(origin("/p/a")),
+                subsection_origin: Arc::new(origin("/p/b")),
+            };
+            let message = error.to_string();
+
+            assert!(message.contains("section 'core'"), "{error}");
+            assert!(message.contains("a variable named 'bare' ("), "{error}");
+            assert!(message.contains("in /p/a"), "{error}");
+            assert!(message.contains("a subsection named 'bare' ("), "{error}");
+            assert!(message.contains("in /p/b"), "{error}");
+            assert!(!message.contains("subsection with a variable"), "{error}");
+        }
+
+        #[rstest]
+        #[case::name_without_value(
+            SectionFault::NameWithoutValue(VariableName::new("answer")),
+            "answer"
+        )]
+        #[case::value_without_name(SectionFault::ValueWithoutName, "value")]
+        fn section_malformed_message_names_the_variable(
+            #[case] fault: SectionFault,
+            #[case] expected: &str,
+        ) {
+            let error = GixError::ConfigSectionMalformed {
+                section: GroupPath::Section(SectionName::new("gixtest")),
+                fault,
+            };
+
+            let message = error.to_string();
+            assert!(message.contains("gixtest"), "{message}");
+            assert!(message.contains(expected), "{message}");
+            assert!(error.source().is_none(), "{message}");
+        }
+
+        #[rstest]
+        fn subsection_key_renders_its_subsection() {
+            let error = GixError::ConfigPathNotUtf8 {
+                key: ConfigKey {
+                    section: SectionName::new("remote"),
+                    subsection: Some(Subsection::new(b"origin")),
+                    name: VariableName::new("url"),
+                },
+                origin: Arc::new(origin("/p/config")),
+            };
+
+            assert!(error.to_string().contains("remote.origin.url"));
+        }
+    }
 }

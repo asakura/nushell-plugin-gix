@@ -43,19 +43,13 @@ pub fn acquire_handle(
 /// Maps a failure to acquire a handle's repository to the error that points at the handle.
 fn handle_failure(source: GixError, span: Span) -> CommandError {
     match &source {
-        GixError::RepositoryGone { git_dir } => CommandError::HandleRepositoryGone {
-            git_dir: git_dir.clone(),
-            span,
-            source,
-        },
+        GixError::RepositoryGone { git_dir } => {
+            CommandError::handle_repository_gone(git_dir.clone(), span, source)
+        }
         GixError::Open {
             path,
             source: _source,
-        } => CommandError::HandleOpenFailed {
-            path: path.clone(),
-            span,
-            source,
-        },
+        } => CommandError::handle_open_failed(path.clone(), span, source),
         _ => CommandError::Git(source),
     }
 }

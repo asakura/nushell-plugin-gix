@@ -24,7 +24,24 @@
 //! not UTF-8 points at the key too (`gix::config-value-not-utf8`). A value that cannot be read as
 //! the `--type` given points at the key (`gix::invalid-config-value`), a path value that is not
 //! UTF-8 points at the key (`gix::config-path-not-utf8`), and an unknown `--type` value points at
-//! the value (`gix::unknown-config-type`).
+//! the value (`gix::unknown-config-type`). `gix config list` takes no key, so every failure to list
+//! an entry points at the handle it was given: a value or path that is not UTF-8 uses the codes
+//! above, a subsection name that is not UTF-8 is `gix::config-subsection-not-utf8`, and a section
+//! that cannot be read back as its names and values is `gix::config-section-unreadable`.
+//!
+//! A list key whose values an empty value (`name =`) all removed points at the key
+//! (`gix::config-key-reset`) when `gix config get` asks for it; `gix config list` leaves such keys out.
+//!
+//! A valueless key read as an `int`, `path` or `string` points at the key (`gix::config-value-missing`),
+//! and a `%(prefix)/` path whose install directory is unknown points at the key too
+//! (`gix::install-dir-unavailable`). A variable and a subsection with one name in one section is
+//! `gix::config-name-clash`, and a section whose parse events break the grammar of a variable is
+//! `gix::config-section-malformed`; both point at the key for `gix config get` and at the handle for
+//! `gix config list`.
+//!
+//! The messages of the configuration errors name where the value came from: its file, as in
+//! `(in /home/u/.gitconfig)`, or else its source kind, as in `(from the environment)`. The codes and
+//! labels do not change.
 //!
 //! A handle whose repository is gone (`gix::repository-gone`) or can no longer be opened
 //! (`gix::open-failed`) points at the value that carried the handle.
@@ -73,6 +90,41 @@ const CONFIG_VALUE_NOT_UTF8_CODE: &str = "gix::config-value-not-utf8";
 const CONFIG_VALUE_CONVERSION_CODE: &str = "gix::invalid-config-value";
 const CONFIG_PATH_NOT_UTF8_CODE: &str = "gix::config-path-not-utf8";
 const UNKNOWN_CONFIG_TYPE_CODE: &str = "gix::unknown-config-type";
+const CONFIG_SUBSECTION_NOT_UTF8_CODE: &str = "gix::config-subsection-not-utf8";
+const CONFIG_SECTION_UNREADABLE_CODE: &str = "gix::config-section-unreadable";
+const CONFIG_KEY_RESET_CODE: &str = "gix::config-key-reset";
+const CONFIG_VALUE_MISSING_CODE: &str = "gix::config-value-missing";
+const INSTALL_DIR_UNAVAILABLE_CODE: &str = "gix::install-dir-unavailable";
+const CONFIG_NAME_CLASH_CODE: &str = "gix::config-name-clash";
+const CONFIG_SECTION_MALFORMED_CODE: &str = "gix::config-section-malformed";
+
+/// Start of the help line that lists a command's error codes.
+const CODES_LINE_PREFIX: &str = "Error codes: ";
+/// Separator of the codes in that line.
+const CODES_SEPARATOR: &str = ", ";
+
+/// Codes `gix config list` can raise; `gix config get` can raise them too.
+pub(super) const CONFIG_LIST_CODES: &[&str] = &[
+    WRONG_INPUT_CODE,
+    CONFIG_VALUE_CONVERSION_CODE,
+    CONFIG_VALUE_NOT_UTF8_CODE,
+    CONFIG_SUBSECTION_NOT_UTF8_CODE,
+    CONFIG_SECTION_UNREADABLE_CODE,
+    CONFIG_SECTION_MALFORMED_CODE,
+    CONFIG_NAME_CLASH_CODE,
+    OPEN_FAILED_CODE,
+    REPOSITORY_GONE_CODE,
+];
+/// Codes only `gix config get` can raise, on top of [`CONFIG_LIST_CODES`].
+pub(super) const CONFIG_GET_EXTRA_CODES: &[&str] = &[
+    INVALID_ARGUMENT_CODE,
+    INVALID_CONFIG_KEY_CODE,
+    UNKNOWN_CONFIG_TYPE_CODE,
+    CONFIG_VALUE_MISSING_CODE,
+    CONFIG_PATH_NOT_UTF8_CODE,
+    INSTALL_DIR_UNAVAILABLE_CODE,
+    CONFIG_KEY_RESET_CODE,
+];
 
 /// Every stable code an error of this plugin can carry.
 #[cfg(test)]
@@ -111,6 +163,13 @@ const ALL_CODES: &[&str] = &[
     CONFIG_VALUE_CONVERSION_CODE,
     CONFIG_PATH_NOT_UTF8_CODE,
     UNKNOWN_CONFIG_TYPE_CODE,
+    CONFIG_SUBSECTION_NOT_UTF8_CODE,
+    CONFIG_SECTION_UNREADABLE_CODE,
+    CONFIG_KEY_RESET_CODE,
+    CONFIG_VALUE_MISSING_CODE,
+    INSTALL_DIR_UNAVAILABLE_CODE,
+    CONFIG_NAME_CLASH_CODE,
+    CONFIG_SECTION_MALFORMED_CODE,
 ];
 
 const INVALID_SIDE_LABEL: &str = "invalid side";
@@ -129,6 +188,19 @@ const CONFIG_VALUE_NOT_UTF8_LABEL: &str = "the value of this key is not valid UT
 const CONFIG_VALUE_CONVERSION_LABEL: &str = "the value of this key cannot be read as this type";
 const CONFIG_PATH_NOT_UTF8_LABEL: &str = "the path in the value of this key is not valid UTF-8";
 const UNKNOWN_CONFIG_TYPE_LABEL: &str = "expected `bool`, `int`, `path` or `string`";
+const CONFIG_SUBSECTION_NOT_UTF8_LABEL: &str =
+    "the subsection name of this section is not valid UTF-8";
+const CONFIG_SECTION_UNREADABLE_LABEL: &str =
+    "the variables of this section could not be read back as names and values";
+const CONFIG_SECTION_MALFORMED_LABEL: &str =
+    "the variables of this section could not be read: its parse events are out of order";
+const CONFIG_KEY_RESET_LABEL: &str = "an empty value reset this key, so it has no value";
+const CONFIG_KEY_RESET_HELP: &str =
+    "`name =` clears a list in git; set the key again to give it a value";
+const CONFIG_VALUE_MISSING_LABEL: &str = "this key has no value, so it cannot be read as this type";
+const INSTALL_DIR_UNAVAILABLE_LABEL: &str =
+    "this path uses %(prefix)/, which needs the install directory of git";
+const CONFIG_NAME_CLASH_LABEL: &str = "this section has a variable and a subsection with this name";
 
 /// Label for a repository that was found but cannot be opened.
 const UNOPENABLE_LABEL: &str =
@@ -148,6 +220,8 @@ pub struct WrongInput {
 }
 
 /// Errors a command can raise: invalid arguments or a failure in the git layer.
+///
+/// The four variants that carry a path box their source so the error stays small; build them with the constructors.
 #[derive(Debug, thiserror::Error)]
 pub enum CommandError {
     /// The git layer failed.
@@ -157,11 +231,16 @@ pub enum CommandError {
     /// The git layer rejected an argument: a revision it could not resolve, shorten or that names
     /// no commit, a short length out of range, a reference name that is not valid, a reference
     /// that moved, a `--paths` entry outside the repository, or a `--paths` entry that is not a
-    /// supported pathspec, or a `gix config get` key that is malformed, a value that is not UTF-8,
-    /// a value that cannot be read as the requested `--type`, or a path value that is not UTF-8.
+    /// supported pathspec, a `gix config get` key that is malformed, a value that is not UTF-8,
+    /// a value that cannot be read as the requested `--type`, a path value that is not UTF-8, or a
+    /// `gix config list` entry that cannot be listed (a value, path or subsection that is not UTF-8,
+    /// or a section that cannot be read back), a valueless key read as a typed value, a `%(prefix)/`
+    /// path whose install directory is unknown, a variable and a subsection with one name, or a
+    /// section whose parse events break the grammar of a variable.
     #[error("{source}")]
     Located {
-        /// Span of the argument the failure is attributed to, chosen by the command that raised it.
+        /// Span of the argument the failure is attributed to, chosen by the command that raised it:
+        /// the value of the flag or argument, or for `gix config list` the handle it was given.
         span: Span,
         /// The underlying git-layer failure.
         #[source]
@@ -177,7 +256,7 @@ pub enum CommandError {
         span: Span,
         /// The underlying git-layer failure.
         #[source]
-        source: GixError,
+        source: Box<GixError>,
     },
 
     /// The repository named by `--repo` was found but cannot be opened.
@@ -189,7 +268,7 @@ pub enum CommandError {
         span: Span,
         /// The underlying git-layer failure.
         #[source]
-        source: GixError,
+        source: Box<GixError>,
     },
 
     /// The repository behind a pipeline handle was moved or deleted after the handle was made.
@@ -201,7 +280,7 @@ pub enum CommandError {
         span: Span,
         /// The underlying git-layer failure.
         #[source]
-        source: GixError,
+        source: Box<GixError>,
     },
 
     /// The repository behind a pipeline handle was found again but cannot be reopened.
@@ -213,7 +292,7 @@ pub enum CommandError {
         span: Span,
         /// The underlying git-layer failure.
         #[source]
-        source: GixError,
+        source: Box<GixError>,
     },
 
     /// The engine could not report the current directory.
@@ -361,6 +440,46 @@ pub enum CommandError {
 }
 
 impl CommandError {
+    /// `--repo` names a path that is not inside a git repository; `span` is the flag's value.
+    #[must_use = "the error is the only result of this constructor"]
+    pub fn not_a_repository(path: PathBuf, span: Span, source: GixError) -> Self {
+        Self::NotARepository {
+            path,
+            span,
+            source: Box::new(source),
+        }
+    }
+
+    /// `--repo` names a repository that was found but cannot be opened.
+    #[must_use = "the error is the only result of this constructor"]
+    pub fn open_failed(path: PathBuf, span: Span, source: GixError) -> Self {
+        Self::OpenFailed {
+            path,
+            span,
+            source: Box::new(source),
+        }
+    }
+
+    /// The repository behind a handle was moved or deleted; `span` is the handle value.
+    #[must_use = "the error is the only result of this constructor"]
+    pub fn handle_repository_gone(git_dir: PathBuf, span: Span, source: GixError) -> Self {
+        Self::HandleRepositoryGone {
+            git_dir,
+            span,
+            source: Box::new(source),
+        }
+    }
+
+    /// The repository behind a handle could not be reopened; `span` is the handle value.
+    #[must_use = "the error is the only result of this constructor"]
+    pub fn handle_open_failed(path: PathBuf, span: Span, source: GixError) -> Self {
+        Self::HandleOpenFailed {
+            path,
+            span,
+            source: Box::new(source),
+        }
+    }
+
     /// Converts into a `LabeledError` pointing at `span`, appending the source chain as help text.
     #[must_use = "returns the converted error; the original is consumed"]
     #[expect(
@@ -771,14 +890,78 @@ impl CommandError {
                 GixError::ConfigValueNotUtf8 {
                     key: _key,
                     source: _source,
+                    origin: _origin,
                 } => Some(CONFIG_VALUE_NOT_UTF8_LABEL),
                 GixError::ConfigValueConversion {
                     key: _key,
                     kind: _kind,
                     source: _source,
+                    origin: _origin,
                 } => Some(CONFIG_VALUE_CONVERSION_LABEL),
-                GixError::ConfigPathNotUtf8 { key: _key } => Some(CONFIG_PATH_NOT_UTF8_LABEL),
-                _ => None,
+                GixError::ConfigValueMissing {
+                    key: _key,
+                    kind: _kind,
+                    origin: _origin,
+                } => Some(CONFIG_VALUE_MISSING_LABEL),
+                GixError::InstallDirUnavailable {
+                    key: _key,
+                    source: _source,
+                    origin: _origin,
+                } => Some(INSTALL_DIR_UNAVAILABLE_LABEL),
+                GixError::ConfigPathNotUtf8 {
+                    key: _key,
+                    origin: _origin,
+                } => Some(CONFIG_PATH_NOT_UTF8_LABEL),
+                GixError::ConfigSubsectionNotUtf8 {
+                    key: _key,
+                    source: _source,
+                    origin: _origin,
+                } => Some(CONFIG_SUBSECTION_NOT_UTF8_LABEL),
+                GixError::ConfigNameClash {
+                    section: _section,
+                    name: _name,
+                    variable_origin: _variable_origin,
+                    subsection_origin: _subsection_origin,
+                } => Some(CONFIG_NAME_CLASH_LABEL),
+                GixError::ConfigSectionUnreadable {
+                    section: _section,
+                    source: _source,
+                } => Some(CONFIG_SECTION_UNREADABLE_LABEL),
+                GixError::ConfigSectionMalformed {
+                    section: _section,
+                    fault: _fault,
+                } => Some(CONFIG_SECTION_MALFORMED_LABEL),
+                GixError::ConfigKeyReset {
+                    key: _key,
+                    origin: _origin,
+                } => Some(CONFIG_KEY_RESET_LABEL),
+                GixError::NotFound {
+                    path: _path,
+                    source: _source,
+                }
+                | GixError::Open {
+                    path: _path,
+                    source: _source,
+                } => None,
+                GixError::RepositoryGone { git_dir: _git_dir } => None,
+                GixError::Head(_)
+                | GixError::Walk(_)
+                | GixError::Spawn(_)
+                | GixError::RefRead(_)
+                | GixError::WalkerPanicked => None,
+                GixError::Commit {
+                    id: _id,
+                    source: _source,
+                } => None,
+                GixError::Timestamp { id: _id } => None,
+                GixError::UnbornHead { name: _name } | GixError::DanglingRef { name: _name } => {
+                    None
+                }
+                GixError::RefUpdate {
+                    name: _name,
+                    source: _source,
+                } => None,
+                GixError::InvalidOid { value: _value } => None,
             },
             Self::UnknownConfigType {
                 given: _given,
@@ -812,8 +995,20 @@ impl CommandError {
             Self::Git(_) | Self::WrongInput(_) => None,
             Self::Located {
                 span: _span,
-                source: _source,
-            } => None,
+                source,
+            } => {
+                if matches!(
+                    source,
+                    GixError::ConfigKeyReset {
+                        key: _key,
+                        origin: _origin,
+                    }
+                ) {
+                    Some(CONFIG_KEY_RESET_HELP)
+                } else {
+                    None
+                }
+            }
             Self::UnknownConfigType {
                 given: _given,
                 span: _span,
@@ -876,6 +1071,10 @@ impl CommandError {
 }
 
 /// The stable code for a git-layer error.
+#[expect(
+    clippy::too_many_lines,
+    reason = "every variant is named with explicit fields: `{ .. }` trips rest_pattern_accessible_field"
+)]
 const fn git_code(error: &GixError) -> &'static str {
     match error {
         GixError::NotFound {
@@ -891,8 +1090,8 @@ const fn git_code(error: &GixError) -> &'static str {
         GixError::Revision {
             expression: _expression,
             source: _source,
-        } => BAD_REVISION_CODE,
-        GixError::Shorten {
+        }
+        | GixError::Shorten {
             expression: _expression,
             source: _source,
         } => BAD_REVISION_CODE,
@@ -915,8 +1114,8 @@ const fn git_code(error: &GixError) -> &'static str {
         GixError::Spawn(_) => IO_CODE,
         GixError::WalkerPanicked => WALKER_PANICKED_CODE,
         GixError::UnbornHead { name: _name } => UNBORN_HEAD_CODE,
-        GixError::RefRead(_) => REF_READ_FAILED_CODE,
         // `DanglingRef` is a failure to read HEAD's resolution, so it shares the ref-read code.
+        GixError::RefRead(_) => REF_READ_FAILED_CODE,
         GixError::DanglingRef { name: _name } => REF_READ_FAILED_CODE,
         GixError::RefMoved {
             name: _name,
@@ -940,984 +1139,60 @@ const fn git_code(error: &GixError) -> &'static str {
         GixError::ConfigValueNotUtf8 {
             key: _key,
             source: _source,
+            origin: _origin,
         } => CONFIG_VALUE_NOT_UTF8_CODE,
         GixError::ConfigValueConversion {
             key: _key,
             kind: _kind,
             source: _source,
+            origin: _origin,
         } => CONFIG_VALUE_CONVERSION_CODE,
-        GixError::ConfigPathNotUtf8 { key: _key } => CONFIG_PATH_NOT_UTF8_CODE,
+        GixError::ConfigPathNotUtf8 {
+            key: _key,
+            origin: _origin,
+        } => CONFIG_PATH_NOT_UTF8_CODE,
+        GixError::ConfigValueMissing {
+            key: _key,
+            kind: _kind,
+            origin: _origin,
+        } => CONFIG_VALUE_MISSING_CODE,
+        GixError::InstallDirUnavailable {
+            key: _key,
+            source: _source,
+            origin: _origin,
+        } => INSTALL_DIR_UNAVAILABLE_CODE,
+        GixError::ConfigSubsectionNotUtf8 {
+            key: _key,
+            source: _source,
+            origin: _origin,
+        } => CONFIG_SUBSECTION_NOT_UTF8_CODE,
+        GixError::ConfigNameClash {
+            section: _section,
+            name: _name,
+            variable_origin: _variable_origin,
+            subsection_origin: _subsection_origin,
+        } => CONFIG_NAME_CLASH_CODE,
+        GixError::ConfigSectionUnreadable {
+            section: _section,
+            source: _source,
+        } => CONFIG_SECTION_UNREADABLE_CODE,
+        GixError::ConfigSectionMalformed {
+            section: _section,
+            fault: _fault,
+        } => CONFIG_SECTION_MALFORMED_CODE,
+        GixError::ConfigKeyReset {
+            key: _key,
+            origin: _origin,
+        } => CONFIG_KEY_RESET_CODE,
     }
+}
+
+/// The help line `Error codes: a, b, c` listing the codes of all `groups` in order.
+#[must_use = "the line is the help text; discarding it drops the documentation"]
+pub(super) fn error_codes_line(groups: &[&[&str]]) -> String {
+    [CODES_LINE_PREFIX, &groups.concat().join(CODES_SEPARATOR)].concat()
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::cdt::{Handle, Repository};
-
-    use nu_plugin_gix_core::{ConfigType, RefExpect, RefTarget, RepositoryLocation};
-    use nu_protocol::ShellError;
-    use rstest::rstest;
-
-    use std::{io, path::Path};
-
-    const MISSING_PATH: &str = "/nonexistent/gix-test";
-    const REF_NAME: &str = "refs/heads/main";
-    const SHORTHAND_NAME: &str = "main";
-
-    /// The object id the reference actually held after a concurrent move.
-    const ACTUAL_OID: &str = "fedcba9876543210fedcba9876543210fedcba98";
-
-    #[derive(Debug, thiserror::Error)]
-    enum TestError {
-        #[error("Test failure: {0}")]
-        Failure(String),
-    }
-
-    /// The error `RepositoryLocation::discover` gives for a path outside any repository.
-    fn missing_repository() -> Result<GixError, TestError> {
-        RepositoryLocation::discover(Path::new(MISSING_PATH))
-            .err()
-            .ok_or_else(|| TestError::Failure("expected an error".into()))
-    }
-
-    /// A stand-in `gix::Error` to use as the `source` of a git failure.
-    fn gix_error() -> gix::Error {
-        gix::Error::from_error(io::Error::other("simulated git failure"))
-    }
-
-    /// The failure the engine reports when it cannot answer a request.
-    fn engine_failure() -> ShellError {
-        ShellError::NushellFailed {
-            msg: "engine unavailable".to_owned(),
-        }
-    }
-
-    /// Unit tests for the `into_labeled` mapping an evaluated script cannot observe:
-    /// the exact span each error points at and the label/help mapping of variants the
-    /// command surface cannot raise.
-    ///
-    /// `WrongInput` is here because the engine rejects non-handle values before they
-    /// reach a command, and no command produces a second handle type to pipe in yet.
-    mod into_labeled {
-        use super::*;
-
-        #[rstest]
-        fn points_wrong_input_at_the_input() {
-            let input_span = Span::new(3, 9);
-
-            let err = CommandError::WrongInput(WrongInput {
-                expected: <Repository as Handle>::TYPE_NAME,
-                hint: "pipe the output of `gix open` into this command",
-                got: "int".to_owned(),
-                span: input_span,
-            });
-
-            let labeled = err.into_labeled(Span::test_data());
-
-            assert_eq!(labeled.msg, "expected a `git repository` value");
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(input_span));
-
-            assert_eq!(
-                labeled.help.as_deref(),
-                Some("pipe the output of `gix open` into this command")
-            );
-        }
-
-        #[rstest]
-        fn points_an_invalid_side_type_at_the_value() {
-            let input_span = Span::new(3, 9);
-            let labeled = CommandError::InvalidSideType {
-                got: "int".to_owned(),
-                span: input_span,
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|label| label.span),
-                Some(input_span)
-            );
-            assert_eq!(
-                labeled.help.as_deref(),
-                Some("use `head`, `index`, `worktree`, or a revision")
-            );
-        }
-
-        #[rstest]
-        fn points_an_empty_revision_at_the_revision() {
-            let revision_span = Span::new(3, 9);
-            let labeled = CommandError::EmptyRevision {
-                span: revision_span,
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|label| label.span),
-                Some(revision_span)
-            );
-            assert_eq!(
-                labeled.help.as_deref(),
-                Some("provide a non-empty revision expression")
-            );
-        }
-
-        #[rstest]
-        fn labels_an_empty_revision_with_its_own_text() {
-            let labeled = CommandError::EmptyRevision {
-                span: Span::test_data(),
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|label| label.text.as_str()),
-                Some("the revision expression is empty")
-            );
-        }
-
-        #[rstest]
-        fn labels_an_invalid_object_id_with_its_own_text() {
-            let labeled = CommandError::InvalidObjectId {
-                expression: "0123456789abcdef0123456789abcdef0123456z".to_owned(),
-                span: Span::test_data(),
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|label| label.text.as_str()),
-                Some("contains characters that are not hexadecimal digits")
-            );
-        }
-
-        #[rstest]
-        fn helps_an_invalid_object_id_with_both_hex_cases() {
-            let labeled = CommandError::InvalidObjectId {
-                expression: "0123456789abcdef0123456789abcdef0123456z".to_owned(),
-                span: Span::test_data(),
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.help.as_deref(),
-                Some("use only the digits 0-9 and the letters a-f or A-F")
-            );
-        }
-
-        #[rstest]
-        fn points_a_non_full_object_id_at_the_value() {
-            let value_span = Span::new(3, 9);
-            let labeled = CommandError::NotAFullObjectId {
-                value: "0123456".to_owned(),
-                span: value_span,
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|label| label.span),
-                Some(value_span)
-            );
-        }
-
-        #[rstest]
-        fn points_an_invalid_side_record_at_the_record() {
-            let record_span = Span::new(3, 9);
-            let labeled = CommandError::InvalidSideRecord { span: record_span }
-                .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|label| label.span),
-                Some(record_span)
-            );
-            assert_eq!(
-                labeled.help.as_deref(),
-                Some("use a record with exactly one `rev` field")
-            );
-        }
-
-        #[rstest]
-        fn points_an_invalid_side_field_at_the_field_value() {
-            let field_span = Span::new(3, 9);
-            let labeled = CommandError::InvalidSideField {
-                field: "rev",
-                got: "int".to_owned(),
-                span: field_span,
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|label| label.span),
-                Some(field_span)
-            );
-            assert_eq!(
-                labeled.help.as_deref(),
-                Some("the `rev` field must contain a revision string")
-            );
-        }
-
-        #[rstest]
-        fn reports_a_deleted_repository_with_its_message() {
-            let err = CommandError::from(GixError::RepositoryGone {
-                git_dir: PathBuf::from("/gone/.git"),
-            });
-
-            let labeled = err.into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.msg,
-                "git repository at '/gone/.git' was moved or deleted"
-            );
-            assert_eq!(labeled.labels.len(), 1);
-        }
-
-        #[rstest]
-        fn points_a_handle_whose_repository_is_gone_at_the_handle() {
-            let handle_span = Span::new(3, 9);
-
-            let labeled = CommandError::HandleRepositoryGone {
-                git_dir: PathBuf::from("/gone/.git"),
-                span: handle_span,
-                source: GixError::RepositoryGone {
-                    git_dir: PathBuf::from("/gone/.git"),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(handle_span));
-
-            assert_eq!(
-                labeled.msg,
-                "the git repository at '/gone/.git' behind this handle was moved or deleted"
-            );
-
-            assert_eq!(
-                labeled.labels.first().map(|l| l.text.as_str()),
-                Some("this handle's repository is no longer at its location")
-            );
-
-            assert_eq!(
-                labeled.help.as_deref(),
-                Some("run `gix open` again to get a handle to the repository's current location")
-            );
-        }
-
-        #[rstest]
-        fn points_a_handle_that_cannot_be_reopened_at_the_handle() {
-            let handle_span = Span::new(3, 9);
-
-            let labeled = CommandError::HandleOpenFailed {
-                path: PathBuf::from(MISSING_PATH),
-                span: handle_span,
-                source: GixError::Open {
-                    path: PathBuf::from(MISSING_PATH),
-                    source: gix_error(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(handle_span));
-
-            assert_eq!(
-                labeled.msg,
-                format!(
-                    "could not reopen the git repository at '{MISSING_PATH}' behind this handle"
-                )
-            );
-
-            assert_eq!(
-                labeled.labels.first().map(|l| l.text.as_str()),
-                Some("this handle's repository can no longer be opened; it may be corrupt")
-            );
-        }
-
-        #[rstest]
-        fn labels_unopenable_repository_as_possibly_corrupt() -> Result<(), TestError> {
-            let source = gix::open(MISSING_PATH)
-                .err()
-                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
-
-            let err = CommandError::from(GixError::Open {
-                path: PathBuf::from(MISSING_PATH),
-                source,
-            });
-
-            let labeled = err.into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|l| l.text.as_str()),
-                Some("the repository was found but could not be opened; it may be corrupt")
-            );
-
-            Ok(())
-        }
-
-        #[rstest]
-        fn does_not_repeat_the_headline_in_help() -> Result<(), TestError> {
-            let err = CommandError::NotARepository {
-                path: PathBuf::from(MISSING_PATH),
-                span: Span::test_data(),
-                source: missing_repository()?,
-            };
-
-            let labeled = err.into_labeled(Span::test_data());
-
-            assert!(
-                labeled
-                    .help
-                    .as_deref()
-                    .is_none_or(|help| !help.contains("no git repository found")),
-                "got {:?}",
-                labeled.help
-            );
-
-            Ok(())
-        }
-
-        #[rstest]
-        fn points_an_open_failure_at_the_flag() {
-            let flag_span = Span::new(3, 9);
-
-            let err = CommandError::OpenFailed {
-                path: PathBuf::from(MISSING_PATH),
-                span: flag_span,
-                source: GixError::Open {
-                    path: PathBuf::from(MISSING_PATH),
-                    source: gix_error(),
-                },
-            };
-
-            let labeled = err.into_labeled(Span::test_data());
-
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(flag_span));
-            assert_eq!(labeled.code.as_deref(), Some(OPEN_FAILED_CODE));
-        }
-
-        #[rstest]
-        fn points_a_non_repository_at_the_flag_with_its_code_and_label() -> Result<(), TestError> {
-            let flag_span = Span::new(3, 9);
-            let labeled = CommandError::NotARepository {
-                path: PathBuf::from(MISSING_PATH),
-                span: flag_span,
-                source: missing_repository()?,
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(flag_span));
-            assert_eq!(
-                labeled.labels.first().map(|l| l.text.as_str()),
-                Some("no git repository found at this path")
-            );
-            assert_eq!(labeled.code.as_deref(), Some(NOT_A_REPOSITORY_CODE));
-
-            Ok(())
-        }
-
-        #[rstest]
-        fn points_a_located_failure_at_its_span() {
-            let revision_span = Span::new(3, 9);
-            let labeled = CommandError::Located {
-                span: revision_span,
-                source: GixError::Revision {
-                    expression: "nope".to_owned(),
-                    source: gix_error(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(revision_span));
-        }
-
-        #[rstest]
-        fn points_an_invalid_config_key_at_its_span_with_a_label() {
-            let key_span = Span::new(3, 9);
-
-            let labeled = CommandError::Located {
-                span: key_span,
-                source: GixError::InvalidConfigKey {
-                    key: "nodot".to_owned(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(key_span));
-
-            assert!(
-                labeled
-                    .labels
-                    .first()
-                    .is_some_and(|label| !label.text.is_empty())
-            );
-        }
-
-        #[rstest]
-        fn points_an_unconvertible_config_value_at_its_key() {
-            let key_span = Span::new(3, 9);
-
-            let labeled = CommandError::Located {
-                span: key_span,
-                source: GixError::ConfigValueConversion {
-                    key: "a.b".to_owned(),
-                    kind: ConfigType::Int,
-                    source: gix_error(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(key_span));
-            assert!(labeled.msg.contains("a.b"), "got {:?}", labeled.msg);
-        }
-
-        #[rstest]
-        fn points_an_unknown_config_type_at_its_value() {
-            let value_span = Span::new(3, 9);
-
-            let labeled = CommandError::UnknownConfigType {
-                given: "bogus".to_owned(),
-                span: value_span,
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.code.as_deref(), Some(UNKNOWN_CONFIG_TYPE_CODE));
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(value_span));
-            assert!(labeled.msg.contains("bogus"), "got {:?}", labeled.msg);
-        }
-
-        #[rstest]
-        fn labels_an_unresolved_revision_with_its_reason() {
-            let labeled = CommandError::Located {
-                span: Span::test_data(),
-                source: GixError::Revision {
-                    expression: "nope".to_owned(),
-                    source: gix_error(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|l| l.text.as_str()),
-                Some(UNRESOLVED_REVISION_LABEL)
-            );
-        }
-
-        #[rstest]
-        fn labels_a_non_commit_revision_with_its_reason() {
-            let labeled = CommandError::Located {
-                span: Span::test_data(),
-                source: GixError::NotACommit {
-                    expression: "HEAD^{tree}".to_owned(),
-                    kind: "tree".to_owned(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|l| l.text.as_str()),
-                Some(NOT_A_COMMIT_LABEL)
-            );
-        }
-
-        #[rstest]
-        fn labels_a_path_outside_the_repository_with_its_reason() {
-            let labeled = CommandError::Located {
-                span: Span::test_data(),
-                source: GixError::PathOutsideRepository {
-                    path: "../outside".to_owned(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|l| l.text.as_str()),
-                Some(PATH_OUTSIDE_REPOSITORY_LABEL)
-            );
-        }
-
-        #[rstest]
-        fn labels_an_out_of_range_short_length_with_its_reason() {
-            let labeled = CommandError::Located {
-                span: Span::test_data(),
-                source: GixError::ShortLen {
-                    len: 3,
-                    detail: "expected 4..=40".to_owned(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|l| l.text.as_str()),
-                Some(SHORT_LEN_OUT_OF_RANGE_LABEL)
-            );
-        }
-
-        #[rstest]
-        #[case::invalid_name(GixError::InvalidRefName {
-            name: SHORTHAND_NAME.to_owned(),
-            detail: "expected a full name".to_owned(),
-        })]
-        #[case::moved(GixError::RefMoved {
-            name: REF_NAME.to_owned(),
-            expected: RefExpect::Missing,
-            actual: Some(RefTarget::Object(ACTUAL_OID.to_owned())),
-        })]
-        fn points_a_ref_update_failure_at_its_span(#[case] source: GixError) {
-            let span = Span::new(3, 9);
-            let labeled = CommandError::Located { span, source }.into_labeled(Span::test_data());
-
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(span));
-        }
-
-        #[rstest]
-        fn labels_an_invalid_ref_name_with_its_reason() {
-            let labeled = CommandError::Located {
-                span: Span::test_data(),
-                source: GixError::InvalidRefName {
-                    name: SHORTHAND_NAME.to_owned(),
-                    detail: "expected a full name".to_owned(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|l| l.text.as_str()),
-                Some(INVALID_REF_NAME_LABEL)
-            );
-        }
-
-        #[rstest]
-        fn labels_a_moved_reference_with_its_reason() {
-            let labeled = CommandError::Located {
-                span: Span::test_data(),
-                source: GixError::RefMoved {
-                    name: REF_NAME.to_owned(),
-                    expected: RefExpect::Missing,
-                    actual: Some(RefTarget::Object(ACTUAL_OID.to_owned())),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|l| l.text.as_str()),
-                Some(REF_MOVED_LABEL)
-            );
-        }
-
-        #[rstest]
-        fn keeps_the_located_headline_out_of_the_help() {
-            let labeled = CommandError::Located {
-                span: Span::test_data(),
-                source: GixError::Revision {
-                    expression: "nope".to_owned(),
-                    source: gix_error(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.msg, "could not resolve revision 'nope'");
-            assert!(
-                labeled
-                    .help
-                    .as_deref()
-                    .is_none_or(|help| !help.contains("could not resolve revision")),
-                "got {:?}",
-                labeled.help
-            );
-        }
-
-        #[rstest]
-        fn points_a_negative_limit_at_its_span() {
-            let limit_span = Span::new(3, 9);
-            let labeled = CommandError::NegativeLimit {
-                limit: -1,
-                span: limit_span,
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|label| label.span),
-                Some(limit_span)
-            );
-        }
-
-        #[rstest]
-        fn labels_a_negative_limit_with_its_code_and_reason() {
-            const NEGATIVE_LIMIT_REASON: &str = "expected a non-negative integer";
-
-            let labeled = CommandError::NegativeLimit {
-                limit: -1,
-                span: Span::test_data(),
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.code.as_deref(), Some(NEGATIVE_LIMIT_CODE));
-            assert_eq!(
-                labeled.labels.first().map(|label| label.text.as_str()),
-                Some(NEGATIVE_LIMIT_REASON)
-            );
-        }
-
-        #[rstest]
-        fn points_an_argument_error_at_its_span() {
-            let argument_span = Span::new(3, 9);
-            let labeled = CommandError::InvalidArgument {
-                source: Box::new(engine_failure()),
-                span: argument_span,
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(
-                labeled.labels.first().map(|label| label.span),
-                Some(argument_span)
-            );
-        }
-
-        #[rstest]
-        fn has_no_label_for_a_timestamp_error() {
-            let err = CommandError::Git(GixError::Timestamp {
-                id: "abc".to_owned(),
-            });
-
-            let labeled = err.into_labeled(Span::test_data());
-
-            assert!(labeled.labels.is_empty());
-        }
-
-        const ARGUMENT_SPAN: Span = Span { start: 3, end: 9 };
-
-        #[rstest]
-        #[case::not_a_full_object_id(
-            CommandError::NotAFullObjectId {
-                value: "0123456".to_owned(),
-                span: ARGUMENT_SPAN,
-            },
-            NOT_A_FULL_OBJECT_ID_CODE
-        )]
-        #[case::invalid_object_id(
-            CommandError::InvalidObjectId {
-                expression: "0123456789abcdef0123456789abcdef0123456z".to_owned(),
-                span: ARGUMENT_SPAN,
-            },
-            INVALID_REVISION_CODE
-        )]
-        #[case::empty_revision(
-            CommandError::EmptyRevision {
-                span: ARGUMENT_SPAN,
-            },
-            INVALID_REVISION_CODE
-        )]
-        #[case::missing_expect(
-            CommandError::MissingExpect {
-                span: ARGUMENT_SPAN,
-            },
-            MISSING_EXPECT_CODE
-        )]
-        #[case::negative_short_len(
-            CommandError::NegativeShortLen {
-                len: -1,
-                span: ARGUMENT_SPAN,
-            },
-            INVALID_SHORT_LEN_CODE
-        )]
-        #[case::negative_skip(
-            CommandError::NegativeSkip {
-                skip: -1,
-                span: ARGUMENT_SPAN,
-            },
-            NEGATIVE_SKIP_CODE
-        )]
-        fn carries_the_code_and_the_span_of_each_argument_error(
-            #[case] error: CommandError,
-            #[case] code: &str,
-        ) {
-            let labeled = error.into_labeled(Span::test_data());
-
-            assert_eq!(labeled.code.as_deref(), Some(code));
-            assert_eq!(
-                labeled.labels.first().map(|label| label.span),
-                Some(ARGUMENT_SPAN)
-            );
-        }
-    }
-
-    /// Unit tests for the variant-to-code mapping of errors that no script-level test asserts.
-    mod codes {
-        use super::*;
-
-        /// A byte that is not valid UTF-8 on its own.
-        const NOT_UTF8_BYTE: u8 = 0xff;
-
-        // No command parses sides yet, so these variants cannot be triggered by a script.
-        #[rstest]
-        #[case::invalid_side_type(
-            CommandError::InvalidSideType {
-                got: "int".to_owned(),
-                span: Span::test_data(),
-            },
-            INVALID_SIDE_CODE
-        )]
-        #[case::invalid_side_record(
-            CommandError::InvalidSideRecord {
-                span: Span::test_data(),
-            },
-            INVALID_SIDE_CODE
-        )]
-        #[case::invalid_side_field(
-            CommandError::InvalidSideField {
-                field: "rev",
-                got: "int".to_owned(),
-                span: Span::test_data(),
-            },
-            INVALID_SIDE_CODE
-        )]
-        fn side_errors_carry_stable_codes(#[case] error: CommandError, #[case] code: &str) {
-            let labeled = error.into_labeled(Span::test_data());
-
-            assert_eq!(labeled.code.as_deref(), Some(code));
-        }
-
-        // The engine cannot be made to fail from a script, so these variants are checked directly.
-        #[rstest]
-        #[case::current_dir(
-            CommandError::CurrentDir {
-                source: Box::new(engine_failure()),
-                span: Span::test_data(),
-            },
-            CURRENT_DIR_CODE
-        )]
-        #[case::help_unavailable(
-            CommandError::HelpUnavailable {
-                source: Box::new(engine_failure()),
-                span: Span::test_data(),
-            },
-            HELP_UNAVAILABLE_CODE
-        )]
-        fn engine_errors_carry_stable_codes(#[case] error: CommandError, #[case] code: &str) {
-            let labeled = error.into_labeled(Span::test_data());
-
-            assert_eq!(labeled.code.as_deref(), Some(code));
-        }
-
-        #[rstest]
-        #[case::open(
-            CommandError::from(GixError::Open {
-                path: PathBuf::from(MISSING_PATH),
-                source: gix_error(),
-            }),
-            OPEN_FAILED_CODE
-        )]
-        #[case::revision(
-            CommandError::from(GixError::Revision {
-                expression: "nope".to_owned(),
-                source: gix_error(),
-            }),
-            BAD_REVISION_CODE
-        )]
-        #[case::shorten(
-            CommandError::from(GixError::Shorten {
-                expression: "nope".to_owned(),
-                source: gix_error(),
-            }),
-            BAD_REVISION_CODE
-        )]
-        #[case::head(CommandError::from(GixError::Head(gix_error())), BAD_REVISION_CODE)]
-        #[case::walk(CommandError::from(GixError::Walk(gix_error())), WALK_FAILED_CODE)]
-        #[case::commit(
-            CommandError::from(GixError::Commit {
-                id: "abc".to_owned(),
-                source: gix_error(),
-            }),
-            COMMIT_UNREADABLE_CODE
-        )]
-        #[case::repository_gone(
-            CommandError::from(GixError::RepositoryGone {
-                git_dir: PathBuf::from("/gone/.git"),
-            }),
-            REPOSITORY_GONE_CODE
-        )]
-        #[case::spawn(
-            CommandError::from(GixError::Spawn(io::Error::other("no thread"))),
-            IO_CODE
-        )]
-        #[case::walker_panicked(CommandError::from(GixError::WalkerPanicked), WALKER_PANICKED_CODE)]
-        #[case::ref_read(
-            CommandError::from(GixError::RefRead(gix_error())),
-            REF_READ_FAILED_CODE
-        )]
-        #[case::dangling_ref(
-            CommandError::from(GixError::DanglingRef {
-                name: "refs/heads/main".to_owned(),
-            }),
-            REF_READ_FAILED_CODE
-        )]
-        #[case::ref_moved(
-            CommandError::from(GixError::RefMoved {
-                name: "refs/heads/main".to_owned(),
-                expected: RefExpect::Missing,
-                actual: Some(RefTarget::Object(ACTUAL_OID.to_owned())),
-            }),
-            REF_MOVED_CODE
-        )]
-        #[case::ref_update(
-            CommandError::from(GixError::RefUpdate {
-                name: "refs/heads/main".to_owned(),
-                source: gix_error(),
-            }),
-            REF_UPDATE_FAILED_CODE
-        )]
-        #[case::invalid_ref_name(
-            CommandError::from(GixError::InvalidRefName {
-                name: "main".to_owned(),
-                detail: "missing the `refs/` prefix".to_owned(),
-            }),
-            INVALID_REF_NAME_CODE
-        )]
-        #[case::pathspec(
-            CommandError::from(GixError::Pathspec {
-                spec: ":(nonsense)x".to_owned(),
-                source: gix_error(),
-            }),
-            INVALID_PATHSPEC_CODE
-        )]
-        #[case::pathspec_attributes(
-            CommandError::from(GixError::PathspecAttributes {
-                spec: ":(attr:linguist-vendored)x".to_owned(),
-            }),
-            INVALID_PATHSPEC_CODE
-        )]
-        #[case::short_len(
-            CommandError::from(GixError::ShortLen {
-                len: 3,
-                detail: "below the minimum of 4".to_owned(),
-            }),
-            INVALID_SHORT_LEN_CODE
-        )]
-        #[case::not_a_commit(
-            CommandError::from(GixError::NotACommit {
-                expression: "HEAD^{tree}".to_owned(),
-                kind: "tree".to_owned(),
-            }),
-            NOT_A_COMMIT_CODE
-        )]
-        #[case::path_outside_repository(
-            CommandError::from(GixError::PathOutsideRepository {
-                path: "../outside".to_owned(),
-            }),
-            PATH_OUTSIDE_REPOSITORY_CODE
-        )]
-        #[case::invalid_config_key(
-            CommandError::from(GixError::InvalidConfigKey {
-                key: "nodot".to_owned(),
-            }),
-            INVALID_CONFIG_KEY_CODE
-        )]
-        #[case::config_value_conversion(
-            CommandError::from(GixError::ConfigValueConversion {
-                key: "a.b".to_owned(),
-                kind: ConfigType::Int,
-                source: gix_error(),
-            }),
-            CONFIG_VALUE_CONVERSION_CODE
-        )]
-        #[case::config_path_not_utf8(
-            CommandError::from(GixError::ConfigPathNotUtf8 {
-                key: "a.b".to_owned(),
-            }),
-            CONFIG_PATH_NOT_UTF8_CODE
-        )]
-        fn git_errors_carry_stable_codes(#[case] error: CommandError, #[case] code: &str) {
-            let labeled = error.into_labeled(Span::test_data());
-
-            assert_eq!(labeled.code.as_deref(), Some(code));
-        }
-
-        #[rstest]
-        fn located_shorten_failures_carry_the_git_code() {
-            let labeled = CommandError::Located {
-                span: Span::test_data(),
-                source: GixError::Shorten {
-                    expression: "nope".to_owned(),
-                    source: gix_error(),
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.code.as_deref(), Some(BAD_REVISION_CODE));
-        }
-
-        #[rstest]
-        fn config_values_that_are_not_utf8_carry_their_code() -> Result<(), TestError> {
-            let Err(decoding) = String::from_utf8(vec![NOT_UTF8_BYTE]) else {
-                return Err(TestError::Failure("expected a UTF-8 error".to_owned()));
-            };
-
-            let key_span = Span::new(3, 6);
-
-            let labeled = CommandError::Located {
-                span: key_span,
-                source: GixError::ConfigValueNotUtf8 {
-                    key: "a.b".to_owned(),
-                    source: decoding,
-                },
-            }
-            .into_labeled(Span::test_data());
-
-            assert_eq!(labeled.code.as_deref(), Some(CONFIG_VALUE_NOT_UTF8_CODE));
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(key_span));
-
-            Ok(())
-        }
-
-        #[rstest]
-        fn unopenable_handles_carry_the_open_failed_code() {
-            let handle_span = Span::test_data();
-
-            let unopenable = CommandError::HandleOpenFailed {
-                path: PathBuf::from(MISSING_PATH),
-                span: handle_span,
-                source: GixError::Open {
-                    path: PathBuf::from(MISSING_PATH),
-                    source: gix_error(),
-                },
-            };
-
-            assert_eq!(
-                unopenable.into_labeled(handle_span).code.as_deref(),
-                Some(OPEN_FAILED_CODE)
-            );
-        }
-    }
-
-    mod documentation {
-        use super::*;
-
-        use crate::GixPlugin;
-
-        use nu_plugin::Plugin as _;
-
-        const CODES_LINE_PREFIX: &str = "Error codes: ";
-
-        /// The codes a command's `extra_description` lists after `Error codes: `.
-        fn listed_codes<'a>(
-            name: &str,
-            extra_description: &'a str,
-        ) -> Result<Vec<&'a str>, TestError> {
-            extra_description
-                .lines()
-                .find_map(|line| line.strip_prefix(CODES_LINE_PREFIX))
-                .ok_or_else(|| TestError::Failure(format!("`{name}` lists no `Error codes:` line")))
-                .map(|codes| codes.split(", ").collect())
-        }
-
-        #[rstest]
-        fn every_documented_code_is_known() -> Result<(), TestError> {
-            for command in GixPlugin::default().commands() {
-                for code in listed_codes(command.name(), command.extra_description())? {
-                    assert!(
-                        ALL_CODES.contains(&code),
-                        "`{code}` is documented but not in ALL_CODES"
-                    );
-                }
-            }
-
-            Ok(())
-        }
-    }
-}
+#[path = "error_tests.rs"]
+mod tests;

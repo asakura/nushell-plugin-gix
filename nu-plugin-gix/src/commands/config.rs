@@ -2,18 +2,24 @@
 
 use crate::GixPlugin;
 use crate::cdt::{Handle, Repository};
+use crate::commands::config_known::{KnownKey, Multi, TABLE, ValueKind};
+use crate::commands::config_read::{self, Group};
+use crate::commands::error::{CONFIG_GET_EXTRA_CODES, CONFIG_LIST_CODES, error_codes_line};
 use crate::commands::{
     CATEGORY, CommandError, acquire_handle, flag_arg, handle_from, help_call, positional_arg,
 };
 
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
-use nu_plugin_gix_core::{self as git, ConfigType, ConfigValue, Registry};
+use nu_plugin_gix_core::{self as git, ConfigType, Registry};
 use nu_protocol::{
-    Category, Example, LabeledError, Signature, Span, Spanned, SyntaxShape, Type, Value,
+    Category, Example, LabeledError, Signature, Span, Spanned, SyntaxShape, Type, Value, record,
 };
 
+use std::sync::LazyLock;
+
 const CONFIG_COMMAND: &str = "gix config";
-const GET_COMMAND: &str = "gix config get";
+pub(super) const GET_COMMAND: &str = "gix config get";
+pub(super) const LIST_COMMAND: &str = "gix config list";
 const KEY_ARG: &str = "key";
 const KEY_POSITION: usize = 0;
 const TYPE_FLAG: &str = "type";
@@ -23,8 +29,97 @@ const INT_TYPE: &str = "int";
 const PATH_TYPE: &str = "path";
 const STRING_TYPE: &str = "string";
 
-/// Sample value shown as the output of the command example.
+/// Sample values shown as the output of the command examples.
 const EXAMPLE_USER_NAME: &str = "Ada";
+const EXAMPLE_EDITOR: &str = "nano";
+const EXAMPLE_REFSPEC: &str = "+refs/heads/*:refs/remotes/origin/*";
+const EXAMPLE_BARE: bool = false;
+const CORE_SECTION: &str = "core";
+const USER_SECTION: &str = "user";
+const BARE_VARIABLE: &str = "bare";
+const EDITOR_VARIABLE: &str = "editor";
+const NAME_VARIABLE: &str = "name";
+
+/// Help text before the list of bool keys.
+const HELP_BOOL_INTRO: &str = "Values come from the system, global, local and worktree configuration and their includes. \
+        A key set in several layers has the value of the highest-priority layer. Writes are not supported.\n\
+        Without --type, a key of the plugin's known-key table is converted to the kind listed there: bool \
+        (true, yes, on, false, no, off), int (as git reads integers, such as 1, 0x10 or 2k) or text. Every other \
+        key is text, so `user.name = 1k` gives the string \"1k\". The bool keys are ";
+/// Help text between the bool and the int key lists.
+const HELP_INT_INTRO: &str = "; the int keys are ";
+/// Help text between the int key list and the list of path keys.
+const HELP_PATH_INTRO: &str = "; the path keys, read as text unless --type path expands them, are ";
+/// Help text between the path key list and the list of multi-value keys.
+const HELP_LIST_INTRO: &str = ". \
+        A valueless key (a name without `=`) is null without --type, where git prints an empty string.\n\
+        Git has no marker for keys that take several values, so the plugin keeps a fixed table of them: ";
+/// Help text between the multi-value keys and the keys that an empty value resets.
+const HELP_RESET_INTRO: &str = ", and the lists that an empty value resets: ";
+/// Help text after the multi-value key list: list rules and how subsections are written.
+const HELP_REST_LISTS: &str = ". \
+        Without --type, a key on that table is always a list of its values in load order across all layers, \
+        even with one value, and each value is converted the same way; an empty value of a reset list removes the \
+        entries before it. Every other key is a single value: the value of its last occurrence, even when it is set \
+        several times. Key names are matched without regard to case; the lists above show them in lowercase, and \
+        a name in angle brackets, such as `<name>`, stands for any subsection name, written in brackets \
+        when the subsection is optional.\n";
+/// Help text on keys whose values were all reset away.
+const HELP_REST_RESET: &str = "\
+        A key whose values were all reset away is an error, `gix::config-key-reset`, where git prints an empty \
+        string; a section or subsection holding only such keys is an empty list.\n";
+/// Help text on keys without a dot, which name sections, and on subsections.
+const HELP_REST_GROUPS: &str = "\
+        Without --type, a key without a dot names a section: the record of its variables and subsections is \
+        returned, nested as in `gix config list`, or null when no layer sets it. A dotted key that no layer sets \
+        as a variable names a subsection: `remote.origin` returns the record of `[remote \"origin\"]`, and a \
+        subsection name may contain dots. A variable and a subsection of one name in one section are an error, \
+        `gix::config-name-clash`, when the section is read; reading the variable itself still works. Groups are \
+        never returned with --type.\n";
+/// Help text on the `--type` conversions and the errors they raise.
+const HELP_REST_TYPED: &str = "\
+        With --type, the value is converted as git does for that type: bool (yes/on/true, no/off/false, \
+        integers; a valueless key is true), int (k, m and g suffixes are powers of 1024), path (~ and %(prefix)/ \
+        expanded; values set in untrusted repository files are ignored; an `:(optional)` path that does not exist \
+        is null) or string (the raw value; git has no string type, so this is an extension of this plugin). With --type only the last value of a key is read, never a list, even \
+        for a key on the list above. A valueless key is an error, `gix::config-value-missing`, for int and path, \
+        where git fails, and for string, which git does not have. A key whose values were all reset away is an error with \
+        --type too.\n";
+/// Help text on the errors of values that are not UTF-8 and of source names.
+const HELP_REST_ERRORS: &str = "\
+        A value that is not UTF-8 is an error only for a read that reaches it.\n\
+        An error names the file its value came from, or else its source kind, such as `environment`.";
+/// The `gix config list` help before its `Error codes:` line.
+const LIST_HELP_TEXT: &str = "Values come from the system, global, local and worktree configuration and their includes. \
+        A key set in several layers has the value of the highest-priority layer.\n\
+        The record nests by section: each section is a column whose record holds its variables, and a \
+        subsection is a record inside its section, so `remote.origin.url` is `remote`, then `origin`, \
+        then `url`. Section and variable names are lowercase. A subsection keeps its case, except in a \
+        legacy `[section.subsection]` header, where it is lowercase too.\n\
+        Each value is converted as `gix config get` converts it without --type: a bool, an int or a \
+        string; a valueless key is null, also as an element of a list. A value of a known bool or int key that does not \
+        convert is an error, `gix::invalid-config-value`. A key on the fixed list of multi-value keys \
+        (see `gix config get`) is a list of its values in load order across all layers, and a key whose values were \
+        all reset away is unset, so it is left out; any other key is the value of its last occurrence. A variable \
+        and a subsection of one name in one section are an error, `gix::config-name-clash`, since git has no groups, \
+        and it fails the whole listing. Columns are alphabetical, not in load order, and no scope or file is \
+        reported.\n\
+        An error names the file its value came from, or else its source kind, such as `environment`.";
+/// Separator of the key names in the help lists.
+const HELP_KEY_SEPARATOR: &str = ", ";
+
+/// The `gix config get` help, with the key lists generated from the known-key table.
+static GET_HELP: LazyLock<String> = LazyLock::new(get_help);
+
+/// The `gix config list` help, with the generated `Error codes:` line.
+static LIST_HELP: LazyLock<String> = LazyLock::new(|| {
+    [
+        LIST_HELP_TEXT,
+        "\n",
+        &error_codes_line(&[CONFIG_LIST_CODES]),
+    ]
+    .concat()
+});
 
 /// Parent of the `gix config` subcommands; prints their help listing.
 #[derive(Clone, Copy, Debug)]
@@ -71,8 +166,9 @@ impl SimplePluginCommand for Config {
     }
 }
 
-/// Reads one key from the layered git configuration of the repository a handle names; null when no
-/// layer sets it.
+/// Reads one key, or one section or subsection as a record, from the layered git configuration of the
+/// repository a handle names; null when the key is unset, and an error when a reset removed all the values
+/// of a key.
 #[derive(Clone, Copy, Debug)]
 pub struct ConfigGet;
 
@@ -84,22 +180,11 @@ impl SimplePluginCommand for ConfigGet {
     }
 
     fn description(&self) -> &'static str {
-        "Read one key from the layered git configuration; null when it is not set."
+        "Read one key, or one section as a record, from the layered git configuration; null when it is not set, and an error when a reset removed all the values of a key."
     }
 
     fn extra_description(&self) -> &'static str {
-        "Values come from the system, global, local and worktree configuration and their includes; \
-        the most recent value wins. Writes are not supported.\n\
-        Without --type, a value is converted by its content: true, yes, on, a valueless key, false, \
-        no and off give a bool; an integer as git reads it (1, 0x10, 2k) gives an int; anything else, \
-        including the empty string, stays a string.\n\
-        With --type, the value is converted as git does for that type: bool (yes/on/true, no/off/false, \
-        integers, valueless keys), int (k, m and g suffixes are powers of 1024), path (~ and %(prefix)/ \
-        expanded; only trusted files are read, so a value set only in an untrusted file is null) or \
-        string (the raw value).\n\
-        Error codes: gix::wrong-input, gix::invalid-argument, gix::invalid-config-key, \
-        gix::unknown-config-type, gix::invalid-config-value, gix::config-value-not-utf8, \
-        gix::config-path-not-utf8, gix::open-failed, gix::repository-gone"
+        GET_HELP.as_str()
     }
 
     fn examples(&self) -> Vec<Example<'_>> {
@@ -119,6 +204,19 @@ impl SimplePluginCommand for ConfigGet {
                 description: "Read core.bare as a boolean",
                 result: None,
             },
+            Example {
+                example: "gix open | gix config get remote.origin.fetch",
+                description: "Read the fetch refspecs of a remote as a list",
+                result: Some(Value::test_list(vec![Value::test_string(EXAMPLE_REFSPEC)])),
+            },
+            Example {
+                example: "gix open | gix config get core",
+                description: "Read the whole core section as a record",
+                result: Some(Value::test_record(record! {
+                    BARE_VARIABLE => Value::test_bool(EXAMPLE_BARE),
+                    EDITOR_VARIABLE => Value::test_string(EXAMPLE_EDITOR),
+                })),
+            },
         ]
     }
 
@@ -127,12 +225,12 @@ impl SimplePluginCommand for ConfigGet {
             .required(
                 KEY_ARG,
                 SyntaxShape::String,
-                "configuration key, e.g. `user.name` or `remote.origin.url`",
+                "configuration key, e.g. `user.name`, `remote.origin` or `core`",
             )
             .named(
                 TYPE_FLAG,
                 SyntaxShape::String,
-                "convert the value as git does: bool, int, path or string",
+                "convert the value as git does for bool, int and path; string (the raw value) is a plugin extension",
                 Some(TYPE_SHORT),
             )
             .input_output_type(
@@ -142,6 +240,8 @@ impl SimplePluginCommand for ConfigGet {
                     Type::Int,
                     Type::Bool,
                     Type::Nothing,
+                    Type::record(),
+                    Type::List(Box::new(Type::Any)),
                 ])),
             )
             .category(Category::Custom(CATEGORY.into()))
@@ -158,25 +258,134 @@ impl SimplePluginCommand for ConfigGet {
     }
 }
 
+/// Lists the whole layered git configuration as one nested record: each section is a column, and a subsection
+/// is a record inside its section.
+#[derive(Clone, Copy, Debug)]
+pub struct ConfigList;
+
+impl SimplePluginCommand for ConfigList {
+    type Plugin = GixPlugin;
+
+    fn name(&self) -> &'static str {
+        LIST_COMMAND
+    }
+
+    fn description(&self) -> &'static str {
+        "List the whole layered git configuration as a nested record."
+    }
+
+    fn extra_description(&self) -> &'static str {
+        LIST_HELP.as_str()
+    }
+
+    fn examples(&self) -> Vec<Example<'_>> {
+        vec![
+            Example {
+                example: "gix open | gix config list",
+                description: "List the whole configuration as a nested record",
+                result: Some(Value::test_record(record! {
+                    CORE_SECTION => Value::test_record(record! {
+                        EDITOR_VARIABLE => Value::test_string(EXAMPLE_EDITOR),
+                    }),
+                    USER_SECTION => Value::test_record(record! {
+                        NAME_VARIABLE => Value::test_string(EXAMPLE_USER_NAME),
+                    }),
+                })),
+            },
+            Example {
+                example: "gix open | gix config list | get core.editor",
+                description: "Read the configured editor from the listed configuration",
+                result: Some(Value::test_string(EXAMPLE_EDITOR)),
+            },
+        ]
+    }
+
+    fn signature(&self) -> Signature {
+        Signature::build(LIST_COMMAND)
+            .input_output_type(
+                Type::Custom(<Repository as Handle>::TYPE_NAME.into()),
+                Type::record(),
+            )
+            .category(Category::Custom(CATEGORY.into()))
+    }
+
+    fn run(
+        &self,
+        plugin: &GixPlugin,
+        _engine: &EngineInterface,
+        call: &EvaluatedCall,
+        input: &Value,
+    ) -> Result<Value, LabeledError> {
+        list_call(plugin.registry(), call, input).map_err(|e| e.into_labeled(call.head))
+    }
+}
+
+/// What `get` reads, decided from the key argument and `--type` before the repository is opened.
+enum Request {
+    /// One key, read as the type `--type` names.
+    Typed(git::ConfigKey, ConfigType),
+    /// A section, such as `core`, read as a record.
+    Section(git::SectionName),
+    /// A dotted key without `--type`: the variable it names when one is set, otherwise the subsection it names.
+    Subsection {
+        /// The key the argument parses to, read as a variable first.
+        key: git::ConfigKey,
+        /// The subsection the argument names after its first dot.
+        subsection: git::Subsection,
+    },
+}
+
+/// Reads the pipeline input, then lists the configuration of the repository it names.
+fn list_call(
+    registry: &Registry,
+    call: &EvaluatedCall,
+    input: &Value,
+) -> Result<Value, CommandError> {
+    let repo = handle_from::<Repository>(input)?;
+
+    run_list(registry, repo, call.head, input.span())
+}
+
+/// Builds the layered configuration of `repository` as one nested record, in which each section is a
+/// column. The record spans `span`.
+///
+/// The registry supplies the opened repository, rebuilding it when it is not cached. A handle whose
+/// repository is gone or cannot be opened is reported at `handle_span`, the value that carried it,
+/// and so is a configuration that cannot be read, including a value that is not UTF-8.
+fn run_list(
+    registry: &Registry,
+    repository: &Repository,
+    span: Span,
+    handle_span: Span,
+) -> Result<Value, CommandError> {
+    let opened = acquire_handle(registry, repository, handle_span)?;
+
+    let config = git::Config::read(&opened).map_err(|source| CommandError::Located {
+        span: handle_span,
+        source,
+    })?;
+
+    config_read::read_all(&config, span).map_err(|source| CommandError::Located {
+        span: handle_span,
+        source,
+    })
+}
+
 /// Reads and checks the key argument, then reads the key from the repository the pipeline input names.
 ///
-/// The argument is settled first, so a bad key is reported whatever the input or the repository is.
+/// The argument is settled first, so a bad key is reported whatever the input or the repository is. Without
+/// `--type` a key without a dot names a section, so it is not checked as a key.
 fn get_call(
     registry: &Registry,
     call: &EvaluatedCall,
     input: &Value,
 ) -> Result<Value, CommandError> {
     let key = positional_arg::<String>(call, KEY_POSITION)?;
-
-    git::validate_config_key(&key.item).map_err(|source| CommandError::Located {
-        span: key.span,
-        source,
-    })?;
-
     let ty = config_type(call)?;
+    let request = parse_request(&key, ty)?;
     let repo = handle_from::<Repository>(input)?;
 
-    run_get(registry, repo, &key, ty, call.head, input.span())
+    run_get(registry, repo, &key, request, call.head, input.span())
 }
 
 /// Reads the `--type` flag: `None` when it is absent, otherwise the type it names.
@@ -192,487 +401,147 @@ fn config_type(call: &EvaluatedCall) -> Result<Option<ConfigType>, CommandError>
     let Spanned { item, span } = given;
 
     match item.as_str() {
-        BOOL_TYPE => Ok(Some(ConfigType::Bool)),
-        INT_TYPE => Ok(Some(ConfigType::Int)),
+        BOOL_TYPE => Ok(Some(ConfigType::Scalar(git::ScalarType::Bool))),
+        INT_TYPE => Ok(Some(ConfigType::Scalar(git::ScalarType::Int))),
         PATH_TYPE => Ok(Some(ConfigType::Path)),
-        STRING_TYPE => Ok(Some(ConfigType::String)),
+        STRING_TYPE => Ok(Some(ConfigType::Scalar(git::ScalarType::String))),
         _ => Err(CommandError::UnknownConfigType { given: item, span }),
     }
 }
 
-/// Reads `key` from the configuration of `repository`, as `ty` when given or converted by its content
-/// otherwise; null when unset.
+/// Parses the key argument once into what to read: a key with `--type` (a key without a dot is invalid), otherwise
+/// a section, or a subsection whose dotted text is also a key.
+///
+/// # Errors
+///
+/// Returns [`git::GixError::InvalidConfigKey`], at the key span, for a key that does not parse.
+fn parse_request(key: &Spanned<String>, ty: Option<ConfigType>) -> Result<Request, CommandError> {
+    match ty {
+        Some(ty) => Ok(Request::Typed(parse_key(key)?, ty)),
+        None => match git::GroupPath::parse(&key.item).map_err(|source| CommandError::Located {
+            span: key.span,
+            source,
+        })? {
+            git::GroupPath::Section(section) => Ok(Request::Section(section)),
+            git::GroupPath::Subsection(_, subsection) => Ok(Request::Subsection {
+                key: parse_key(key)?,
+                subsection,
+            }),
+        },
+    }
+}
+
+/// Parses the key argument as a `section.name` or `section.subsection.name` key.
+///
+/// # Errors
+///
+/// Returns [`git::GixError::InvalidConfigKey`], at the key span, for a key that does not parse.
+fn parse_key(key: &Spanned<String>) -> Result<git::ConfigKey, CommandError> {
+    git::ConfigKey::parse(&key.item).map_err(|source| CommandError::Located {
+        span: key.span,
+        source,
+    })
+}
+
+/// Reads what `request` names from the configuration of `repository`. Null when unset.
 ///
 /// The registry supplies the opened repository, rebuilding it when it is not cached. A handle whose
 /// repository is gone or cannot be opened is reported at `handle_span`, the value that carried it.
-/// A value that cannot be read is reported at the span of the key argument.
-/// The value spans `span`.
+/// A value, list or group that cannot be read, and a key whose values a reset removed all of, is reported at
+/// the span of the key argument. The value spans `span`.
 fn run_get(
     registry: &Registry,
     repository: &Repository,
     key: &Spanned<String>,
-    ty: Option<ConfigType>,
+    request: Request,
     span: Span,
     handle_span: Span,
 ) -> Result<Value, CommandError> {
     let opened = acquire_handle(registry, repository, handle_span)?;
 
-    let found = ty.map_or_else(
-        || git::config_get_auto(&opened, &key.item),
-        |ty| git::config_get_typed(&opened, &key.item, ty),
-    );
-
-    let value = found.map_err(|source| CommandError::Located {
+    let config = git::Config::read(&opened).map_err(|source| CommandError::Located {
         span: key.span,
         source,
     })?;
 
-    Ok(config_value(value, span))
+    let value = match request {
+        Request::Typed(config_key, ty) => config_read::read_typed(
+            &config,
+            &config_key,
+            ty,
+            &git::PathContext::of(&opened),
+            span,
+        ),
+        Request::Section(section) => {
+            config_read::read_section(&config, &section, span).map(|group| group_value(group, span))
+        }
+        Request::Subsection {
+            key: config_key,
+            subsection,
+        } => config_read::read_variable(&config, &config_key, span).and_then(|found| {
+            found.map_or_else(
+                || {
+                    config_read::read_subsection(&config, config_key.section(), &subsection, span)
+                        .map(|group| group_value(group, span))
+                },
+                Ok,
+            )
+        }),
+    };
+
+    value.map_err(|source| CommandError::Located {
+        span: key.span,
+        source,
+    })
 }
 
-/// Maps a converted configuration value to the Nushell value it is returned as; null when unset.
-fn config_value(value: Option<ConfigValue>, span: Span) -> Value {
-    match value {
-        None => Value::nothing(span),
-        Some(ConfigValue::Bool(flag)) => Value::bool(flag, span),
-        Some(ConfigValue::Int(number)) => Value::int(number, span),
-        Some(ConfigValue::Path(text) | ConfigValue::String(text)) => Value::string(text, span),
+/// The Nushell value of a section or subsection: null when no key of it is set, an empty list when resets
+/// removed all its values, otherwise its record.
+fn group_value(group: Group, span: Span) -> Value {
+    match group {
+        Group::Missing => Value::nothing(span),
+        Group::AllReset => Value::list(Vec::new(), span),
+        Group::Record(record) => Value::record(record, span),
     }
+}
+
+/// The long help of `gix config get`; its key lists are the rows of the known-key table.
+fn get_help() -> String {
+    [
+        HELP_BOOL_INTRO,
+        &key_list(|row| row.kind == ValueKind::Bool),
+        HELP_INT_INTRO,
+        &key_list(|row| row.kind == ValueKind::Int),
+        HELP_PATH_INTRO,
+        &key_list(|row| row.kind == ValueKind::Path),
+        HELP_LIST_INTRO,
+        &key_list(|row| row.multi == Multi::List),
+        HELP_RESET_INTRO,
+        &key_list(|row| row.multi == Multi::ListWithReset),
+        HELP_REST_LISTS,
+        HELP_REST_RESET,
+        HELP_REST_GROUPS,
+        HELP_REST_TYPED,
+        HELP_REST_ERRORS,
+        "\n",
+        &error_codes_line(&[CONFIG_LIST_CODES, CONFIG_GET_EXTRA_CODES]),
+    ]
+    .concat()
+}
+
+/// The selected rows of the known-key table, in table order, joined by commas.
+fn key_list<F>(select: F) -> String
+where
+    F: Fn(&KnownKey) -> bool,
+{
+    TABLE
+        .iter()
+        .filter(|row| select(row))
+        .map(KnownKey::to_string)
+        .collect::<Vec<_>>()
+        .join(HELP_KEY_SEPARATOR)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::fixtures::{RepoInputError, plugin_test, repo_input};
-
-    use nu_plugin_gix_testing_support::{
-        AssertionError, FixtureError, FixtureRepo as _, TestRepo, append_config,
-        assert_label_in_script, eval_labeled_error, eval_value, test_repo,
-    };
-    use nu_plugin_test_support::PluginTest;
-    use nu_protocol::ShellError;
-    use rstest::rstest;
-
-    use std::{assert_matches, fs, io};
-
-    #[derive(Debug, thiserror::Error)]
-    enum TestError {
-        #[error(transparent)]
-        Shell(#[from] Box<ShellError>),
-
-        #[error(transparent)]
-        Assertion(#[from] AssertionError),
-
-        #[error(transparent)]
-        Fixture(#[from] FixtureError),
-
-        #[error(transparent)]
-        Input(#[from] RepoInputError),
-
-        #[error(transparent)]
-        Io(#[from] io::Error),
-
-        #[expect(
-            dead_code,
-            reason = "mandatory TestError variant; the smoke tests have no failure path that builds it"
-        )]
-        #[error("Test failure: {0}")]
-        Failure(String),
-    }
-
-    impl From<ShellError> for TestError {
-        fn from(error: ShellError) -> Self {
-            Self::Shell(Box::new(error))
-        }
-    }
-
-    const LOCAL_SECTION: &[u8] = b"[gixtest]\n\tanswer = 42\n";
-    const LOCAL_KEY: &str = "gixtest.answer";
-    const LOCAL_VALUE: i64 = 42;
-    const TYPED_SECTION: &[u8] = b"[gixtest]\n\tflag = yes\n\tnum = 2k\n\ttext = maybe\n";
-    const FLAG_KEY: &str = "gixtest.flag";
-    const NUM_KEY: &str = "gixtest.num";
-    const TEXT_KEY: &str = "gixtest.text";
-    const ABSENT_KEY: &str = "gixtest.absent";
-    const KILOBYTES_VALUE: i64 = 2048;
-    const PLAIN_TEXT: &str = "maybe";
-    const UNKNOWN_TYPE: &str = "bogus";
-    const MALFORMED_KEY: &str = "nodot";
-    const INVALID_KEY_CODE: &str = "gix::invalid-config-key";
-    const UNKNOWN_TYPE_CODE: &str = "gix::unknown-config-type";
-    const INVALID_VALUE_CODE: &str = "gix::invalid-config-value";
-
-    /// The script `gix config get <key>` evaluated against the fixture input.
-    fn get_script(key: &str) -> String {
-        format!("{GET_COMMAND} {key}")
-    }
-
-    /// The script `gix config get <key> --type <ty>` evaluated against the fixture input.
-    fn typed_script(key: &str, ty: &str) -> String {
-        format!("{GET_COMMAND} {key} --{TYPE_FLAG} {ty}")
-    }
-
-    mod signature {
-        use super::*;
-
-        #[rstest]
-        #[case::parent(Config, CONFIG_COMMAND)]
-        #[case::get(ConfigGet, GET_COMMAND)]
-        fn names_the_command<C>(#[case] command: C, #[case] expected: &str)
-        where
-            C: SimplePluginCommand<Plugin = GixPlugin>,
-        {
-            assert_eq!(command.signature().name, expected);
-        }
-
-        #[rstest]
-        #[case::parent(Config)]
-        #[case::get(ConfigGet)]
-        fn runs_in_the_gix_category<C>(#[case] command: C)
-        where
-            C: SimplePluginCommand<Plugin = GixPlugin>,
-        {
-            assert_matches!(
-                command.signature().category,
-                Category::Custom(category) if category == CATEGORY
-            );
-        }
-
-        #[rstest]
-        fn transforms_a_repository_handle_into_a_typed_value_or_null() {
-            let signature = SimplePluginCommand::signature(&ConfigGet);
-
-            assert_eq!(
-                signature.input_output_types,
-                vec![(
-                    Type::Custom(<Repository as Handle>::TYPE_NAME.into()),
-                    Type::OneOf(Box::new([
-                        Type::String,
-                        Type::Int,
-                        Type::Bool,
-                        Type::Nothing
-                    ])),
-                )]
-            );
-        }
-
-        #[rstest]
-        fn takes_a_type_flag_with_a_short_form() {
-            let signature = SimplePluginCommand::signature(&ConfigGet);
-
-            assert_matches!(
-                signature.get_long_flag(TYPE_FLAG),
-                Some(flag) if flag.short == Some(TYPE_SHORT)
-            );
-        }
-
-        #[rstest]
-        fn prints_help_for_the_parent() {
-            let signature = SimplePluginCommand::signature(&Config);
-
-            assert_eq!(
-                signature.input_output_types,
-                vec![(Type::Nothing, Type::String)]
-            );
-        }
-    }
-
-    /// End-to-end tests: `gix config get` driven through the plugin protocol against the fixtures.
-    mod eval {
-        use super::*;
-
-        mod read {
-            use super::*;
-
-            #[rstest]
-            fn reads_a_local_value(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-
-                append_config(repo.path(), LOCAL_SECTION)?;
-
-                let value = eval_value(
-                    &mut plugin,
-                    &get_script(LOCAL_KEY),
-                    repo_input(repo.path())?,
-                )?;
-
-                assert_eq!(value.as_int()?, LOCAL_VALUE);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn returns_null_for_an_unset_key(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-
-                let value = eval_value(
-                    &mut plugin,
-                    &get_script(ABSENT_KEY),
-                    repo_input(repo.path())?,
-                )?;
-
-                assert!(value.is_nothing(), "got {value:?}");
-
-                Ok(())
-            }
-        }
-
-        mod auto {
-            use super::*;
-
-            #[rstest]
-            fn reads_a_yes_as_a_bool_without_type(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-
-                append_config(repo.path(), TYPED_SECTION)?;
-
-                let value =
-                    eval_value(&mut plugin, &get_script(FLAG_KEY), repo_input(repo.path())?)?;
-
-                assert!(value.as_bool()?);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn reads_a_word_as_a_string_without_type(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-
-                append_config(repo.path(), TYPED_SECTION)?;
-
-                let value =
-                    eval_value(&mut plugin, &get_script(TEXT_KEY), repo_input(repo.path())?)?;
-
-                assert_eq!(value.as_str()?, PLAIN_TEXT);
-
-                Ok(())
-            }
-        }
-
-        mod typed {
-            use super::*;
-
-            #[rstest]
-            fn reads_a_yes_as_a_bool(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-
-                append_config(repo.path(), TYPED_SECTION)?;
-
-                let value = eval_value(
-                    &mut plugin,
-                    &typed_script(FLAG_KEY, BOOL_TYPE),
-                    repo_input(repo.path())?,
-                )?;
-
-                assert!(value.as_bool()?);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn reads_a_kilobyte_suffix_as_an_int(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-
-                append_config(repo.path(), TYPED_SECTION)?;
-
-                let value = eval_value(
-                    &mut plugin,
-                    &typed_script(NUM_KEY, INT_TYPE),
-                    repo_input(repo.path())?,
-                )?;
-
-                assert_eq!(value.as_int()?, KILOBYTES_VALUE);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn keeps_a_yes_as_the_string_with_type_string(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-
-                append_config(repo.path(), TYPED_SECTION)?;
-
-                let value = eval_value(
-                    &mut plugin,
-                    &typed_script(FLAG_KEY, STRING_TYPE),
-                    repo_input(repo.path())?,
-                )?;
-
-                assert_eq!(value.as_str()?, "yes");
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn reads_a_plain_value_as_a_path_string(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-
-                append_config(repo.path(), TYPED_SECTION)?;
-
-                let value = eval_value(
-                    &mut plugin,
-                    &typed_script(TEXT_KEY, PATH_TYPE),
-                    repo_input(repo.path())?,
-                )?;
-
-                assert_eq!(value.as_str()?, PLAIN_TEXT);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn returns_null_for_an_unset_key(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-
-                let value = eval_value(
-                    &mut plugin,
-                    &typed_script(ABSENT_KEY, INT_TYPE),
-                    repo_input(repo.path())?,
-                )?;
-
-                assert!(value.is_nothing(), "got {value:?}");
-
-                Ok(())
-            }
-        }
-
-        mod errors {
-            use super::*;
-
-            #[rstest]
-            fn rejects_an_invalid_key_before_looking_at_the_repository(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-                let input = repo_input(repo.path())?;
-
-                fs::remove_dir_all(repo.path())?;
-
-                let labeled = eval_labeled_error(&mut plugin, &get_script(MALFORMED_KEY), input)?;
-
-                assert_eq!(labeled.code.as_deref(), Some(INVALID_KEY_CODE));
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn rejects_an_invalid_key_with_its_code_and_label(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-                let script = get_script(MALFORMED_KEY);
-
-                let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
-
-                assert_eq!(labeled.code.as_deref(), Some(INVALID_KEY_CODE));
-                assert_label_in_script!(&labeled, &script);
-
-                assert!(
-                    labeled.msg.contains(MALFORMED_KEY),
-                    "message lacks the key: {}",
-                    labeled.msg
-                );
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn rejects_an_unknown_type_before_looking_at_the_repository(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-                let input = repo_input(repo.path())?;
-
-                fs::remove_dir_all(repo.path())?;
-
-                let script = typed_script(FLAG_KEY, UNKNOWN_TYPE);
-                let labeled = eval_labeled_error(&mut plugin, &script, input)?;
-
-                assert_eq!(labeled.code.as_deref(), Some(UNKNOWN_TYPE_CODE));
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn rejects_an_unknown_type_with_its_code_and_label(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-                let script = typed_script(FLAG_KEY, UNKNOWN_TYPE);
-
-                let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
-
-                assert_eq!(labeled.code.as_deref(), Some(UNKNOWN_TYPE_CODE));
-                assert_label_in_script!(&labeled, &script);
-
-                Ok(())
-            }
-
-            #[rstest]
-            fn rejects_a_value_that_does_not_convert_to_the_type(
-                plugin_test: Result<PluginTest, FixtureError>,
-                test_repo: Result<TestRepo, FixtureError>,
-            ) -> Result<(), TestError> {
-                let mut plugin = plugin_test?;
-                let repo = test_repo?;
-
-                append_config(repo.path(), TYPED_SECTION)?;
-
-                let labeled = eval_labeled_error(
-                    &mut plugin,
-                    &typed_script(TEXT_KEY, INT_TYPE),
-                    repo_input(repo.path())?,
-                )?;
-
-                assert_eq!(labeled.code.as_deref(), Some(INVALID_VALUE_CODE));
-
-                Ok(())
-            }
-        }
-    }
-}
+#[path = "config_tests.rs"]
+mod tests;
