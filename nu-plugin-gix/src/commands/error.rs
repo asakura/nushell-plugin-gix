@@ -21,7 +21,10 @@
 //! invalid or unsupported `--paths` pathspec points at that entry (`gix::invalid-pathspec`).
 //!
 //! An invalid `gix config get` key points at the key (`gix::invalid-config-key`); a value that is
-//! not UTF-8 points at the key too (`gix::config-value-not-utf8`).
+//! not UTF-8 points at the key too (`gix::config-value-not-utf8`). A value that cannot be read as
+//! the `--type` given points at the key (`gix::invalid-config-value`), a path value that is not
+//! UTF-8 points at the key (`gix::config-path-not-utf8`), and an unknown `--type` value points at
+//! the value (`gix::unknown-config-type`).
 //!
 //! A handle whose repository is gone (`gix::repository-gone`) or can no longer be opened
 //! (`gix::open-failed`) points at the value that carried the handle.
@@ -67,6 +70,9 @@ const UNBORN_HEAD_CODE: &str = "gix::unborn-head";
 const MISSING_EXPECT_CODE: &str = "gix::missing-expect";
 const INVALID_CONFIG_KEY_CODE: &str = "gix::invalid-config-key";
 const CONFIG_VALUE_NOT_UTF8_CODE: &str = "gix::config-value-not-utf8";
+const CONFIG_VALUE_CONVERSION_CODE: &str = "gix::invalid-config-value";
+const CONFIG_PATH_NOT_UTF8_CODE: &str = "gix::config-path-not-utf8";
+const UNKNOWN_CONFIG_TYPE_CODE: &str = "gix::unknown-config-type";
 
 /// Every stable code an error of this plugin can carry.
 #[cfg(test)]
@@ -102,6 +108,9 @@ const ALL_CODES: &[&str] = &[
     MISSING_EXPECT_CODE,
     INVALID_CONFIG_KEY_CODE,
     CONFIG_VALUE_NOT_UTF8_CODE,
+    CONFIG_VALUE_CONVERSION_CODE,
+    CONFIG_PATH_NOT_UTF8_CODE,
+    UNKNOWN_CONFIG_TYPE_CODE,
 ];
 
 const INVALID_SIDE_LABEL: &str = "invalid side";
@@ -117,6 +126,9 @@ const PATHSPEC_ATTRIBUTES_LABEL: &str = "attribute pathspecs such as :(attr:...)
 const INVALID_CONFIG_KEY_LABEL: &str =
     "expected a key like `section.name` or `section.subsection.name`";
 const CONFIG_VALUE_NOT_UTF8_LABEL: &str = "the value of this key is not valid UTF-8";
+const CONFIG_VALUE_CONVERSION_LABEL: &str = "the value of this key cannot be read as this type";
+const CONFIG_PATH_NOT_UTF8_LABEL: &str = "the path in the value of this key is not valid UTF-8";
+const UNKNOWN_CONFIG_TYPE_LABEL: &str = "expected `bool`, `int`, `path` or `string`";
 
 /// Label for a repository that was found but cannot be opened.
 const UNOPENABLE_LABEL: &str =
@@ -145,7 +157,8 @@ pub enum CommandError {
     /// The git layer rejected an argument: a revision it could not resolve, shorten or that names
     /// no commit, a short length out of range, a reference name that is not valid, a reference
     /// that moved, a `--paths` entry outside the repository, or a `--paths` entry that is not a
-    /// supported pathspec, or a `gix config get` key that is malformed or a value that is not UTF-8.
+    /// supported pathspec, or a `gix config get` key that is malformed, a value that is not UTF-8,
+    /// a value that cannot be read as the requested `--type`, or a path value that is not UTF-8.
     #[error("{source}")]
     Located {
         /// Span of the argument the failure is attributed to, chosen by the command that raised it.
@@ -336,6 +349,15 @@ pub enum CommandError {
         /// Span of the invalid field value.
         span: Span,
     },
+
+    /// A `--type` value names no configuration value type.
+    #[error("'{given}' is not a configuration value type")]
+    UnknownConfigType {
+        /// The value as written.
+        given: String,
+        /// Span of the `--type` value.
+        span: Span,
+    },
 }
 
 impl CommandError {
@@ -401,6 +423,10 @@ impl CommandError {
             Self::InvalidSideField {
                 field: _field,
                 got: _got,
+                span: _span,
+            } => self.source(),
+            Self::UnknownConfigType {
+                given: _given,
                 span: _span,
             } => self.source(),
             Self::EmptyRevision { span: _span }
@@ -535,6 +561,10 @@ impl CommandError {
                 value: _value,
                 span: _span,
             } => NOT_A_FULL_OBJECT_ID_CODE,
+            Self::UnknownConfigType {
+                given: _given,
+                span: _span,
+            } => UNKNOWN_CONFIG_TYPE_CODE,
         }
     }
 
@@ -577,6 +607,10 @@ impl CommandError {
                 span,
                 field: _field,
                 got: _got,
+            } => Some(*span),
+            Self::UnknownConfigType {
+                span,
+                given: _given,
             } => Some(*span),
             Self::NegativeLimit {
                 span,
@@ -738,8 +772,18 @@ impl CommandError {
                     key: _key,
                     source: _source,
                 } => Some(CONFIG_VALUE_NOT_UTF8_LABEL),
+                GixError::ConfigValueConversion {
+                    key: _key,
+                    kind: _kind,
+                    source: _source,
+                } => Some(CONFIG_VALUE_CONVERSION_LABEL),
+                GixError::ConfigPathNotUtf8 { key: _key } => Some(CONFIG_PATH_NOT_UTF8_LABEL),
                 _ => None,
             },
+            Self::UnknownConfigType {
+                given: _given,
+                span: _span,
+            } => Some(UNKNOWN_CONFIG_TYPE_LABEL),
             Self::WrongInput(_) | Self::Git(_) => None,
         }
     }
@@ -769,6 +813,10 @@ impl CommandError {
             Self::Located {
                 span: _span,
                 source: _source,
+            } => None,
+            Self::UnknownConfigType {
+                given: _given,
+                span: _span,
             } => None,
             Self::HandleRepositoryGone {
                 git_dir: _git_dir,
@@ -893,6 +941,12 @@ const fn git_code(error: &GixError) -> &'static str {
             key: _key,
             source: _source,
         } => CONFIG_VALUE_NOT_UTF8_CODE,
+        GixError::ConfigValueConversion {
+            key: _key,
+            kind: _kind,
+            source: _source,
+        } => CONFIG_VALUE_CONVERSION_CODE,
+        GixError::ConfigPathNotUtf8 { key: _key } => CONFIG_PATH_NOT_UTF8_CODE,
     }
 }
 
@@ -902,7 +956,7 @@ mod tests {
 
     use crate::cdt::{Handle, Repository};
 
-    use nu_plugin_gix_core::{RefExpect, RefTarget, RepositoryLocation};
+    use nu_plugin_gix_core::{ConfigType, RefExpect, RefTarget, RepositoryLocation};
     use nu_protocol::ShellError;
     use rstest::rstest;
 
@@ -952,6 +1006,7 @@ mod tests {
         #[rstest]
         fn points_wrong_input_at_the_input() {
             let input_span = Span::new(3, 9);
+
             let err = CommandError::WrongInput(WrongInput {
                 expected: <Repository as Handle>::TYPE_NAME,
                 hint: "pipe the output of `gix open` into this command",
@@ -1291,6 +1346,39 @@ mod tests {
                     .first()
                     .is_some_and(|label| !label.text.is_empty())
             );
+        }
+
+        #[rstest]
+        fn points_an_unconvertible_config_value_at_its_key() {
+            let key_span = Span::new(3, 9);
+
+            let labeled = CommandError::Located {
+                span: key_span,
+                source: GixError::ConfigValueConversion {
+                    key: "a.b".to_owned(),
+                    kind: ConfigType::Int,
+                    source: gix_error(),
+                },
+            }
+            .into_labeled(Span::test_data());
+
+            assert_eq!(labeled.labels.first().map(|l| l.span), Some(key_span));
+            assert!(labeled.msg.contains("a.b"), "got {:?}", labeled.msg);
+        }
+
+        #[rstest]
+        fn points_an_unknown_config_type_at_its_value() {
+            let value_span = Span::new(3, 9);
+
+            let labeled = CommandError::UnknownConfigType {
+                given: "bogus".to_owned(),
+                span: value_span,
+            }
+            .into_labeled(Span::test_data());
+
+            assert_eq!(labeled.code.as_deref(), Some(UNKNOWN_CONFIG_TYPE_CODE));
+            assert_eq!(labeled.labels.first().map(|l| l.span), Some(value_span));
+            assert!(labeled.msg.contains("bogus"), "got {:?}", labeled.msg);
         }
 
         #[rstest]
@@ -1719,6 +1807,20 @@ mod tests {
                 key: "nodot".to_owned(),
             }),
             INVALID_CONFIG_KEY_CODE
+        )]
+        #[case::config_value_conversion(
+            CommandError::from(GixError::ConfigValueConversion {
+                key: "a.b".to_owned(),
+                kind: ConfigType::Int,
+                source: gix_error(),
+            }),
+            CONFIG_VALUE_CONVERSION_CODE
+        )]
+        #[case::config_path_not_utf8(
+            CommandError::from(GixError::ConfigPathNotUtf8 {
+                key: "a.b".to_owned(),
+            }),
+            CONFIG_PATH_NOT_UTF8_CODE
         )]
         fn git_errors_carry_stable_codes(#[case] error: CommandError, #[case] code: &str) {
             let labeled = error.into_labeled(Span::test_data());

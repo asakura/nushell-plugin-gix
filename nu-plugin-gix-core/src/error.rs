@@ -1,5 +1,6 @@
 //! Error type for the git layer; knows nothing about Nushell.
 
+use crate::config::ConfigType;
 use crate::refs::{RefExpect, RefTarget};
 
 use std::{io, path::PathBuf, string::FromUtf8Error};
@@ -206,5 +207,24 @@ pub enum GixError {
         /// The decoding failure.
         #[source]
         source: FromUtf8Error,
+    },
+
+    /// The value of a configuration key cannot be read as the requested type.
+    #[error("the value of configuration key '{key}' cannot be read as {kind}")]
+    ConfigValueConversion {
+        /// The key as written.
+        key: String,
+        /// The type the value was read as.
+        kind: ConfigType,
+        /// The underlying `gix` error.
+        #[source]
+        source: gix::Error,
+    },
+
+    /// The path in a configuration key is not valid UTF-8.
+    #[error("the path in configuration key '{key}' is not valid UTF-8")]
+    ConfigPathNotUtf8 {
+        /// The key as written.
+        key: String,
     },
 }
