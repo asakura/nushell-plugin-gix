@@ -7,7 +7,7 @@ use super::{
 
 use crate::{GixError, log::changes::FileChange};
 
-use gix::{bstr::ByteSlice as _, mailmap::Snapshot, objs::commit::MessageRef};
+use gix::{bstr::ByteSlice as _, mailmap::Snapshot, objs::commit};
 
 /// One commit as `gix log` shows it.
 ///
@@ -73,7 +73,7 @@ impl CommitInfo {
         )?;
 
         let parents = commit.parent_ids().map(gix::Id::detach).collect();
-        let parsed = MessageRef::from_bytes(message.as_bytes());
+        let parsed = commit::MessageRef::from_bytes(message.as_bytes());
         let subject = parsed.summary().to_str_lossy().into_owned();
 
         let body = parsed

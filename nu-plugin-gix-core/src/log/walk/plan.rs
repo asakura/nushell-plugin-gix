@@ -14,7 +14,7 @@ use crate::log::options::{LogSettings, LogStart, Mailmap};
 use crate::log::paths::PathFilter;
 use crate::log::tips::Tips;
 
-use gix::{pathspec::Pattern, revision::walk::Sorting, traverse::commit::simple::CommitTimeOrder};
+use gix::{pathspec::Pattern, revision::walk, traverse::commit};
 
 use std::sync::{Arc, atomic::AtomicBool, mpsc::SyncSender};
 
@@ -92,7 +92,9 @@ impl Walk {
     ) -> Result<impl Iterator<Item = Result<CommitInfo, GixError>> + '_, GixError> {
         let platform = repo
             .rev_walk(self.tips.include.iter().copied())
-            .sorting(Sorting::ByCommitTime(CommitTimeOrder::NewestFirst))
+            .sorting(walk::Sorting::ByCommitTime(
+                commit::simple::CommitTimeOrder::NewestFirst,
+            ))
             .with_hidden(self.tips.hide.iter().copied());
 
         let platform = if self.settings.first_parent {
