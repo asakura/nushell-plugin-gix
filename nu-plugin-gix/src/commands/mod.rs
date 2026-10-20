@@ -1,5 +1,6 @@
 //! Plugin commands.
 
+mod config;
 mod error;
 mod gix;
 mod input;
@@ -10,6 +11,7 @@ mod refs;
 mod rev;
 
 pub use self::{
+    config::{Config, ConfigGet},
     error::CommandError,
     gix::{CATEGORY, Gix, help_call},
     input::{

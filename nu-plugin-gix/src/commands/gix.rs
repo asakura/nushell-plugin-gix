@@ -156,8 +156,10 @@ mod tests {
         use super::*;
 
         /// Every command the plugin registers, spelled as Nushell sees it.
-        const EXPECTED_COMMANDS: [&str; 8] = [
+        const EXPECTED_COMMANDS: [&str; 10] = [
             "gix",
+            "gix config",
+            "gix config get",
             "gix log",
             "gix open",
             "gix ref",
