@@ -22,20 +22,24 @@ bstr = "1.13"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 gix = { version = "0.89", default-features = false, features = [
   "sha1",
+  # gix::pathspec and gix::filter::plumbing::encoding (encoding_rs) are used directly
+  "attributes",
   "blob-diff",
+  "mailmap",
   "parallel",
   "revision",
   "serde",
 ] }
 miette = "7.6"
 nu-cmd-lang = { version = "0.112.2", default-features = false }
+nu-command = { version = "0.112.2", default-features = false, features = ["os"] }
 nu-plugin = "0.112.2"
 nu-plugin-gix-core = { version = "0.1.0", path = "nu-plugin-gix-core" }
 nu-plugin-gix-testing-support = { path = "nu-plugin-gix-testing-support" }
 nu-plugin-test-support = "0.112.2"
 nu-protocol = "0.112.2"
 nu-test-support = { version = "0.112.2", features = ["os"] }
-rstest = { version = "0.27", default-features = false }
+rstest = { version = "0.28", default-features = false }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 tempfile = "3.27"

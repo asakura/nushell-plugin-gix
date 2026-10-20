@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 gix = { workspace = true }
 nu-cmd-lang = { workspace = true }
+nu-command = { workspace = true }
 nu-plugin = { workspace = true }
 nu-plugin-test-support = { workspace = true }
 nu-protocol = { workspace = true }
