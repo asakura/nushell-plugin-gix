@@ -50,6 +50,39 @@ pub enum GixError {
         source: gix::Error,
     },
 
+    /// A revision expression names an object that does not peel to a commit, such as a tree or a blob.
+    #[error("revision '{expression}' names a {kind}, not a commit")]
+    NotACommit {
+        /// The revision expression as written.
+        expression: String,
+        /// Kind of the object it names, such as `tree` or `blob`.
+        kind: String,
+    },
+
+    /// A path names a location outside the repository's worktree.
+    #[error("path '{path}' is outside the repository")]
+    PathOutsideRepository {
+        /// The path as written.
+        path: String,
+    },
+
+    /// A path given to the history filter is not a valid git pathspec.
+    #[error("invalid pathspec '{spec}'")]
+    Pathspec {
+        /// The pathspec as written.
+        spec: String,
+        /// The underlying `gix` error.
+        #[source]
+        source: gix::Error,
+    },
+
+    /// A pathspec uses attribute magic (`:(attr:...)`), which the history filter cannot evaluate.
+    #[error("pathspec '{spec}' uses attribute magic, which is not supported")]
+    PathspecAttributes {
+        /// The pathspec as written.
+        spec: String,
+    },
+
     /// A resolved object id could not be shortened because its object could not be read.
     #[error("could not shorten the object id of revision '{expression}'")]
     Shorten {
@@ -84,6 +117,10 @@ pub enum GixError {
     /// The background thread that walks history could not be started.
     #[error("could not start the history walker")]
     Spawn(#[source] io::Error),
+
+    /// The background thread that walks history panicked, so the history may be incomplete.
+    #[error("the commit walker thread panicked")]
+    WalkerPanicked,
 
     /// HEAD points at a branch that has no commits yet (e.g. a fresh repository).
     #[error("HEAD points at branch '{name}', which has no commits yet")]

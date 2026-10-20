@@ -343,21 +343,24 @@ mod tests {
     use super::*;
 
     use crate::fixtures::open_fixture;
-    use gix::Id;
-    use gix::open::Options;
-    use gix::refs::Target;
-    use gix::refs::name::Error as NameError;
-    use gix::refs::transaction::{PreviousValue, RefEdit};
+    use gix::{
+        Id,
+        open::Options,
+        refs::{
+            Target,
+            name::Error as NameError,
+            transaction::{PreviousValue, RefEdit},
+        },
+    };
     use nu_plugin_gix_testing_support::{
-        ANNOTATED_TAG_REF, FEATURE_BRANCH_REF, FIXTURE_REFLOG_MESSAGE, FixtureError, GIT_DIR,
-        LIGHT_TAG_REF, MAIN_BRANCH, TaggedTestRepo, UnbornTestRepo, remove_committer_identity,
-        tagged_repo, unborn_repo,
+        ANNOTATED_TAG_REF, FEATURE_BRANCH_REF, FIXTURE_REFLOG_MESSAGE, FixtureError,
+        FixtureRepo as _, GIT_DIR, LIGHT_TAG_REF, MAIN_BRANCH, TaggedTestRepo, UnbornTestRepo,
+        remove_committer_identity, tagged_repo, unborn_repo,
     };
     use rstest::rstest;
 
     use std::assert_matches;
-    use std::fs;
-    use std::io;
+    use std::{fs, io};
 
     #[derive(Debug, thiserror::Error)]
     enum TestError {

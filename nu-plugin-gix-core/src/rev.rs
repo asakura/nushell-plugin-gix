@@ -132,7 +132,7 @@ fn shorten(
                 return Err(GixError::ShortLen { len, detail });
             }
 
-            let prefix = Prefix::new(&id.detach(), len).map_err(|error| GixError::ShortLen {
+            let prefix = Prefix::new(&id, len).map_err(|error| GixError::ShortLen {
                 len,
                 detail: error.to_string(),
             })?;
