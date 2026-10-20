@@ -29,13 +29,12 @@ jobs:
     steps:
       - uses: DeterminateSystems/nix-installer-action@v23
 
-      # Empty version = token-capture-only mode: exports the cache API tokens
-      # GC needs without starting the daemon.
+      # Installs the released binary and exports its path as HESTIA_BIN along
+      # with the cache API tokens GC needs; avoids building hestia from source.
       - uses: Mic92/hestia@v3
-        with:
-          version: ""
 
       - name: Run garbage collection
-        run: nix run github:Mic92/hestia/v3 -- gc ${{ inputs.dry-run && '--dry-run' || '' }}
+        run: |
+          "$HESTIA_BIN" gc ${{ inputs.dry-run && '--dry-run' || '' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
