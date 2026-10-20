@@ -21,6 +21,16 @@ A side names where a command reads content from, or writes content to.
 - Sides are independent of path selection. `--paths` is a separate list that limits a command's scope; a side never implies a path filter.
 - Commands that read the working tree honor `.gitignore`, `.git/info/exclude` and global excludes. Explicit `--paths` remain available for operations that need ignored files.
 
+## Config
+
+`gix config get <key>` reads one value from the repository's git configuration, for example `gix open | gix config get user.name`.
+
+- The key is `section.name` or `section.subsection.name`; section and name match case-insensitively.
+- The value comes from the system, global, local and worktree configuration and their includes, as resolved when the repository was opened; `gix open` does not isolate the repository, so includes are followed. The most recent value wins, as with `git config --get`.
+- A key that no layer sets returns `null`. A key that is present with no value also reads as `null`.
+- Writes are not supported.
+- Errors: `gix::invalid-config-key` for a key that is not a dotted name, and `gix::config-value-not-utf8` for a value that is not valid UTF-8.
+
 ## License
 
 Licensed under either of Apache License, Version 2.0 or MIT license at your option.
