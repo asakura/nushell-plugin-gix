@@ -6,6 +6,14 @@
 //! helpers (`plugin_test_for`, `custom_value_input`, `pin_pwd`) used by plugin tests, plus the
 //! script assertions (`eval_value`, `eval_labeled_error`, ...) that inspect what a script produces.
 
+#![cfg_attr(
+    test,
+    expect(
+        clippy::panic_in_result_fn,
+        reason = "rstest cases return Result for ?-based setup but use assertions for checks"
+    )
+)]
+
 mod assertions;
 mod basic;
 mod engine;
@@ -47,6 +55,6 @@ pub use self::paths::{
 };
 pub use self::repo::{
     COMMITTER_EMAIL, COMMITTER_NAME, COMMITTER_TIME, EDITED_CONTENT, FIXTURE_REFLOG_MESSAGE,
-    FixtureRepo, GIT_DIR, MAIN_BRANCH, ORIGINAL_CONTENT, PATHS_FILE, committer, dir, plain_dir,
-    remove_committer_identity, remove_loose_object,
+    FixtureRepo, GIT_DIR, MAIN_BRANCH, ORIGINAL_CONTENT, PATHS_FILE, append_config, committer, dir,
+    plain_dir, remove_committer_identity, remove_loose_object,
 };

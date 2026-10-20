@@ -128,6 +128,20 @@ fn add_committer_identity(git_dir: &Path) -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// Appends `text` verbatim to the local configuration of the worktree repository in `dir`.
+///
+/// # Errors
+///
+/// Returns [`FixtureError::Io`] when the configuration file cannot be opened or written.
+pub fn append_config(dir: &Path, text: &[u8]) -> Result<(), FixtureError> {
+    let config = dir.join(GIT_DIR).join(CONFIG_FILE);
+    let mut file = fs::OpenOptions::new().append(true).open(config)?;
+
+    file.write_all(text)?;
+
+    Ok(())
+}
+
 /// Removes the fixture committer from the worktree repository in `dir`, so that git cannot write a reflog there.
 ///
 /// # Errors
@@ -314,6 +328,28 @@ mod tests {
             let dir = plain_dir?;
 
             assert_matches!(ensure_not_enclosed(dir.path()), Ok(()));
+
+            Ok(())
+        }
+    }
+
+    mod append_config {
+        use super::*;
+
+        const APPENDED: &[u8] = b"[gixtest]\n\tanswer = 42\n";
+
+        #[rstest]
+        fn appends_bytes_to_the_local_config(
+            dir: Result<TempDir, FixtureError>,
+        ) -> Result<(), TestError> {
+            let dir = dir?;
+            let _repo = init_isolated(dir.path(), create::Kind::WithWorktree)?;
+
+            append_config(dir.path(), APPENDED)?;
+
+            let config = fs::read(dir.path().join(GIT_DIR).join(CONFIG_FILE))?;
+
+            assert!(config.ends_with(APPENDED));
 
             Ok(())
         }
