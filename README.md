@@ -27,9 +27,17 @@ A side names where a command reads content from, or writes content to.
 
 - The key is `section.name` or `section.subsection.name`; section and name match case-insensitively.
 - The value comes from the system, global, local and worktree configuration and their includes, as resolved when the repository was opened; `gix open` does not isolate the repository, so includes are followed. The most recent value wins, as with `git config --get`.
-- A key that no layer sets returns `null`. A key that is present with no value also reads as `null`.
+- A key that no layer sets returns `null`.
+- Without `--type`, the value is converted by its content: `true`, `yes`, `on`, a valueless key, `false`, `no` and `off` (any case) give a bool; an integer as git reads it (`1`, `0`, `0x10`, `2k`) gives an int; anything else, including the empty string, stays a string.
+- `--type` (short `-t`) takes `bool`, `int`, `path` or `string` and converts the value as git does for that type:
+  - `bool`: `yes`, `on`, `true`, `no`, `off`, `false`, integers (non-zero is true) and valueless keys.
+  - `int`: integers as git reads them, including `0x` hexadecimal, and `k`, `m` and `g` suffixes (powers of 1024).
+  - `path`: `~` and `%(prefix)/` are expanded. Only trusted files are read, so a value set only in an untrusted file is `null`.
+  - `string`: the raw value.
+- A value that does not convert to the requested `--type` is an error, not `null`.
+- Example: `gix open | gix config get core.bare --type bool`.
 - Writes are not supported.
-- Errors: `gix::invalid-config-key` for a key that is not a dotted name, and `gix::config-value-not-utf8` for a value that is not valid UTF-8.
+- Errors: `gix::invalid-config-key` for a key that is not a dotted name; `gix::config-value-not-utf8` for a value that is not valid UTF-8; `gix::unknown-config-type` for a `--type` that is not one of the four types; `gix::invalid-config-value` for a value that does not convert to the requested `--type`; and `gix::config-path-not-utf8` for an expanded `path` that is not valid UTF-8.
 
 ## License
 
