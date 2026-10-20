@@ -12,13 +12,18 @@
 //! received the input.
 //!
 //! A git failure to resolve a revision points at the revision argument (`gix::bad-revision`), and
-//! an out-of-range `--short-len` at its value (`gix::invalid-short-len`). A reference update
+//! an out-of-range `--short-len` at its value (`gix::invalid-short-len`). A revision that names a
+//! tree or blob is `gix::not-a-commit`. A reference update
 //! rejected for its name points at the name (`gix::invalid-ref-name`), and one whose `--expect`
 //! value no longer holds points at that value (`gix::ref-moved`). Such a failure is a
-//! `CommandError::Located`, which pairs the git error with the span it is labelled at.
+//! `CommandError::Located`, which pairs the git error with the span it is labelled at. A `--paths`
+//! entry outside the repository points at that entry (`gix::path-outside-repository`), and an
+//! invalid or unsupported `--paths` pathspec points at that entry (`gix::invalid-pathspec`).
 //!
 //! A handle whose repository is gone (`gix::repository-gone`) or can no longer be opened
 //! (`gix::open-failed`) points at the value that carried the handle.
+//!
+//! A negative `--limit` or `--skip` points at its value.
 
 use super::oid::{SHA1_HEX_LEN, SHA256_HEX_LEN};
 
@@ -36,14 +41,19 @@ const HELP_UNAVAILABLE_CODE: &str = "gix::help-unavailable";
 const INVALID_ARGUMENT_CODE: &str = "gix::invalid-argument";
 const INVALID_INPUT_CODE: &str = "gix::invalid-input";
 const BAD_REVISION_CODE: &str = "gix::bad-revision";
+const NOT_A_COMMIT_CODE: &str = "gix::not-a-commit";
 const INVALID_REVISION_CODE: &str = "gix::invalid-revision";
+const PATH_OUTSIDE_REPOSITORY_CODE: &str = "gix::path-outside-repository";
+const INVALID_PATHSPEC_CODE: &str = "gix::invalid-pathspec";
 const NOT_A_FULL_OBJECT_ID_CODE: &str = "gix::not-a-full-object-id";
 const WALK_FAILED_CODE: &str = "gix::walk-failed";
 const COMMIT_UNREADABLE_CODE: &str = "gix::commit-unreadable";
 const BAD_TIMESTAMP_CODE: &str = "gix::bad-timestamp";
 const IO_CODE: &str = "gix::io";
+const WALKER_PANICKED_CODE: &str = "gix::walker-panicked";
 const WRONG_INPUT_CODE: &str = "gix::wrong-input";
 const NEGATIVE_LIMIT_CODE: &str = "gix::negative-limit";
+const NEGATIVE_SKIP_CODE: &str = "gix::negative-skip";
 const INVALID_SIDE_CODE: &str = "gix::invalid-side";
 const REF_READ_FAILED_CODE: &str = "gix::ref-read-failed";
 const REF_MOVED_CODE: &str = "gix::ref-moved";
@@ -64,14 +74,19 @@ const ALL_CODES: &[&str] = &[
     INVALID_ARGUMENT_CODE,
     INVALID_INPUT_CODE,
     BAD_REVISION_CODE,
+    NOT_A_COMMIT_CODE,
     INVALID_REVISION_CODE,
+    PATH_OUTSIDE_REPOSITORY_CODE,
+    INVALID_PATHSPEC_CODE,
     NOT_A_FULL_OBJECT_ID_CODE,
     WALK_FAILED_CODE,
     COMMIT_UNREADABLE_CODE,
     BAD_TIMESTAMP_CODE,
     IO_CODE,
+    WALKER_PANICKED_CODE,
     WRONG_INPUT_CODE,
     NEGATIVE_LIMIT_CODE,
+    NEGATIVE_SKIP_CODE,
     INVALID_SIDE_CODE,
     REF_READ_FAILED_CODE,
     REF_MOVED_CODE,
@@ -84,10 +99,14 @@ const ALL_CODES: &[&str] = &[
 
 const INVALID_SIDE_LABEL: &str = "invalid side";
 const UNRESOLVED_REVISION_LABEL: &str = "this revision does not resolve in the repository";
+const NOT_A_COMMIT_LABEL: &str = "this revision names a tree or blob, not a commit";
 const UNSHORTENABLE_REVISION_LABEL: &str = "the object this revision names could not be read";
 const SHORT_LEN_OUT_OF_RANGE_LABEL: &str = "this short length is out of range";
 const INVALID_REF_NAME_LABEL: &str = "this is not a valid full reference name";
 const REF_MOVED_LABEL: &str = "the reference does not hold the value expected here";
+const PATH_OUTSIDE_REPOSITORY_LABEL: &str =
+    "this path is outside the repository; paths are relative to the current directory";
+const PATHSPEC_ATTRIBUTES_LABEL: &str = "attribute pathspecs such as :(attr:...) are not supported";
 
 /// Label for a repository that was found but cannot be opened.
 const UNOPENABLE_LABEL: &str =
@@ -113,8 +132,10 @@ pub enum CommandError {
     #[error(transparent)]
     Git(#[from] GixError),
 
-    /// The git layer rejected an argument: a revision it could not resolve or shorten, a short
-    /// length out of range, a reference name that is not valid, or a reference that moved.
+    /// The git layer rejected an argument: a revision it could not resolve, shorten or that names
+    /// no commit, a short length out of range, a reference name that is not valid, a reference
+    /// that moved, a `--paths` entry outside the repository, or a `--paths` entry that is not a
+    /// supported pathspec.
     #[error("{source}")]
     Located {
         /// Span of the argument the failure is attributed to, chosen by the command that raised it.
@@ -225,6 +246,15 @@ pub enum CommandError {
         span: Span,
     },
 
+    /// A negative value was given for the number of commits to skip.
+    #[error("skip must not be negative, got {skip}")]
+    NegativeSkip {
+        /// The negative skip as written.
+        skip: i64,
+        /// Span of the skip value.
+        span: Span,
+    },
+
     /// A negative value was given for the short object id length.
     #[error("short length must not be negative, got {len}")]
     NegativeShortLen {
@@ -301,6 +331,10 @@ pub enum CommandError {
 impl CommandError {
     /// Converts into a `LabeledError` pointing at `span`, appending the source chain as help text.
     #[must_use = "returns the converted error; the original is consumed"]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the source table names every variant, so it is inherently wide"
+    )]
     pub fn into_labeled(self, span: Span) -> LabeledError {
         let mut chain = Vec::new();
 
@@ -332,6 +366,10 @@ impl CommandError {
             } => found.source(),
             Self::NegativeLimit {
                 limit: _limit,
+                span: _span,
+            } => self.source(),
+            Self::NegativeSkip {
+                skip: _skip,
                 span: _span,
             } => self.source(),
             Self::NegativeShortLen {
@@ -459,6 +497,10 @@ impl CommandError {
                 limit: _limit,
                 span: _span,
             } => NEGATIVE_LIMIT_CODE,
+            Self::NegativeSkip {
+                skip: _skip,
+                span: _span,
+            } => NEGATIVE_SKIP_CODE,
             Self::NegativeShortLen {
                 len: _len,
                 span: _span,
@@ -530,6 +572,7 @@ impl CommandError {
                 span,
                 limit: _limit,
             } => Some(*span),
+            Self::NegativeSkip { span, skip: _skip } => Some(*span),
             Self::NegativeShortLen { span, len: _len } => Some(*span),
             Self::CurrentDir {
                 span,
@@ -601,6 +644,10 @@ impl CommandError {
                 limit: _limit,
                 span: _span,
             } => Some("expected a non-negative integer"),
+            Self::NegativeSkip {
+                skip: _skip,
+                span: _span,
+            } => Some("expected a non-negative integer"),
             Self::NegativeShortLen {
                 len: _len,
                 span: _span,
@@ -647,6 +694,10 @@ impl CommandError {
                     expression: _expression,
                     source: _source,
                 } => Some(UNRESOLVED_REVISION_LABEL),
+                GixError::NotACommit {
+                    expression: _expression,
+                    kind: _kind,
+                } => Some(NOT_A_COMMIT_LABEL),
                 GixError::Shorten {
                     expression: _expression,
                     source: _source,
@@ -664,6 +715,14 @@ impl CommandError {
                     expected: _expected,
                     actual: _actual,
                 } => Some(REF_MOVED_LABEL),
+                GixError::PathOutsideRepository { path: _path } => {
+                    Some(PATH_OUTSIDE_REPOSITORY_LABEL)
+                }
+                GixError::Pathspec {
+                    spec: _spec,
+                    source: _source,
+                } => Some("this pathspec cannot be parsed"),
+                GixError::PathspecAttributes { spec: _spec } => Some(PATHSPEC_ATTRIBUTES_LABEL),
                 _ => None,
             },
             Self::WrongInput(_) | Self::Git(_) => None,
@@ -720,6 +779,10 @@ impl CommandError {
                 limit: _limit,
                 span: _span,
             } => None,
+            Self::NegativeSkip {
+                skip: _skip,
+                span: _span,
+            } => None,
             Self::NegativeShortLen {
                 len: _len,
                 span: _span,
@@ -770,6 +833,16 @@ const fn git_code(error: &GixError) -> &'static str {
             expression: _expression,
             source: _source,
         } => BAD_REVISION_CODE,
+        GixError::NotACommit {
+            expression: _expression,
+            kind: _kind,
+        } => NOT_A_COMMIT_CODE,
+        GixError::PathOutsideRepository { path: _path } => PATH_OUTSIDE_REPOSITORY_CODE,
+        GixError::Pathspec {
+            spec: _spec,
+            source: _source,
+        } => INVALID_PATHSPEC_CODE,
+        GixError::PathspecAttributes { spec: _spec } => INVALID_PATHSPEC_CODE,
         GixError::Walk(_) => WALK_FAILED_CODE,
         GixError::Commit {
             id: _id,
@@ -777,6 +850,7 @@ const fn git_code(error: &GixError) -> &'static str {
         } => COMMIT_UNREADABLE_CODE,
         GixError::Timestamp { id: _id } => BAD_TIMESTAMP_CODE,
         GixError::Spawn(_) => IO_CODE,
+        GixError::WalkerPanicked => WALKER_PANICKED_CODE,
         GixError::UnbornHead { name: _name } => UNBORN_HEAD_CODE,
         GixError::RefRead(_) => REF_READ_FAILED_CODE,
         // `DanglingRef` is a failure to read HEAD's resolution, so it shares the ref-read code.
@@ -834,11 +908,9 @@ mod tests {
             .ok_or_else(|| TestError::Failure("expected an error".into()))
     }
 
-    /// A real `gix::Error`, as produced for a path that cannot be opened.
-    fn gix_error() -> Result<gix::Error, TestError> {
-        gix::open(MISSING_PATH)
-            .err()
-            .ok_or_else(|| TestError::Failure("expected an error".into()))
+    /// A stand-in `gix::Error` to use as the `source` of a git failure.
+    fn gix_error() -> gix::Error {
+        gix::Error::from_error(io::Error::other("simulated git failure"))
     }
 
     /// The failure the engine reports when it cannot answer a request.
@@ -1025,6 +1097,7 @@ mod tests {
         #[rstest]
         fn points_a_handle_whose_repository_is_gone_at_the_handle() {
             let handle_span = Span::new(3, 9);
+
             let labeled = CommandError::HandleRepositoryGone {
                 git_dir: PathBuf::from("/gone/.git"),
                 span: handle_span,
@@ -1034,15 +1107,18 @@ mod tests {
             }
             .into_labeled(Span::test_data());
 
+            assert_eq!(labeled.labels.first().map(|l| l.span), Some(handle_span));
+
             assert_eq!(
                 labeled.msg,
                 "the git repository at '/gone/.git' behind this handle was moved or deleted"
             );
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(handle_span));
+
             assert_eq!(
                 labeled.labels.first().map(|l| l.text.as_str()),
                 Some("this handle's repository is no longer at its location")
             );
+
             assert_eq!(
                 labeled.help.as_deref(),
                 Some("run `gix open` again to get a handle to the repository's current location")
@@ -1050,17 +1126,20 @@ mod tests {
         }
 
         #[rstest]
-        fn points_a_handle_that_cannot_be_reopened_at_the_handle() -> Result<(), TestError> {
+        fn points_a_handle_that_cannot_be_reopened_at_the_handle() {
             let handle_span = Span::new(3, 9);
+
             let labeled = CommandError::HandleOpenFailed {
                 path: PathBuf::from(MISSING_PATH),
                 span: handle_span,
                 source: GixError::Open {
                     path: PathBuf::from(MISSING_PATH),
-                    source: gix_error()?,
+                    source: gix_error(),
                 },
             }
             .into_labeled(Span::test_data());
+
+            assert_eq!(labeled.labels.first().map(|l| l.span), Some(handle_span));
 
             assert_eq!(
                 labeled.msg,
@@ -1068,13 +1147,11 @@ mod tests {
                     "could not reopen the git repository at '{MISSING_PATH}' behind this handle"
                 )
             );
-            assert_eq!(labeled.labels.first().map(|l| l.span), Some(handle_span));
+
             assert_eq!(
                 labeled.labels.first().map(|l| l.text.as_str()),
                 Some("this handle's repository can no longer be opened; it may be corrupt")
             );
-
-            Ok(())
         }
 
         #[rstest]
@@ -1121,14 +1198,15 @@ mod tests {
         }
 
         #[rstest]
-        fn points_an_open_failure_at_the_flag() -> Result<(), TestError> {
+        fn points_an_open_failure_at_the_flag() {
             let flag_span = Span::new(3, 9);
+
             let err = CommandError::OpenFailed {
                 path: PathBuf::from(MISSING_PATH),
                 span: flag_span,
                 source: GixError::Open {
                     path: PathBuf::from(MISSING_PATH),
-                    source: gix_error()?,
+                    source: gix_error(),
                 },
             };
 
@@ -1136,8 +1214,6 @@ mod tests {
 
             assert_eq!(labeled.labels.first().map(|l| l.span), Some(flag_span));
             assert_eq!(labeled.code.as_deref(), Some(OPEN_FAILED_CODE));
-
-            Ok(())
         }
 
         #[rstest]
@@ -1161,29 +1237,27 @@ mod tests {
         }
 
         #[rstest]
-        fn points_a_located_failure_at_its_span() -> Result<(), TestError> {
+        fn points_a_located_failure_at_its_span() {
             let revision_span = Span::new(3, 9);
             let labeled = CommandError::Located {
                 span: revision_span,
                 source: GixError::Revision {
                     expression: "nope".to_owned(),
-                    source: gix_error()?,
+                    source: gix_error(),
                 },
             }
             .into_labeled(Span::test_data());
 
             assert_eq!(labeled.labels.first().map(|l| l.span), Some(revision_span));
-
-            Ok(())
         }
 
         #[rstest]
-        fn labels_an_unresolved_revision_with_its_reason() -> Result<(), TestError> {
+        fn labels_an_unresolved_revision_with_its_reason() {
             let labeled = CommandError::Located {
                 span: Span::test_data(),
                 source: GixError::Revision {
                     expression: "nope".to_owned(),
-                    source: gix_error()?,
+                    source: gix_error(),
                 },
             }
             .into_labeled(Span::test_data());
@@ -1192,8 +1266,39 @@ mod tests {
                 labeled.labels.first().map(|l| l.text.as_str()),
                 Some(UNRESOLVED_REVISION_LABEL)
             );
+        }
 
-            Ok(())
+        #[rstest]
+        fn labels_a_non_commit_revision_with_its_reason() {
+            let labeled = CommandError::Located {
+                span: Span::test_data(),
+                source: GixError::NotACommit {
+                    expression: "HEAD^{tree}".to_owned(),
+                    kind: "tree".to_owned(),
+                },
+            }
+            .into_labeled(Span::test_data());
+
+            assert_eq!(
+                labeled.labels.first().map(|l| l.text.as_str()),
+                Some(NOT_A_COMMIT_LABEL)
+            );
+        }
+
+        #[rstest]
+        fn labels_a_path_outside_the_repository_with_its_reason() {
+            let labeled = CommandError::Located {
+                span: Span::test_data(),
+                source: GixError::PathOutsideRepository {
+                    path: "../outside".to_owned(),
+                },
+            }
+            .into_labeled(Span::test_data());
+
+            assert_eq!(
+                labeled.labels.first().map(|l| l.text.as_str()),
+                Some(PATH_OUTSIDE_REPOSITORY_LABEL)
+            );
         }
 
         #[rstest]
@@ -1266,12 +1371,12 @@ mod tests {
         }
 
         #[rstest]
-        fn keeps_the_located_headline_out_of_the_help() -> Result<(), TestError> {
+        fn keeps_the_located_headline_out_of_the_help() {
             let labeled = CommandError::Located {
                 span: Span::test_data(),
                 source: GixError::Revision {
                     expression: "nope".to_owned(),
-                    source: gix_error()?,
+                    source: gix_error(),
                 },
             }
             .into_labeled(Span::test_data());
@@ -1285,8 +1390,6 @@ mod tests {
                 "got {:?}",
                 labeled.help
             );
-
-            Ok(())
         }
 
         #[rstest]
@@ -1383,6 +1486,13 @@ mod tests {
             },
             INVALID_SHORT_LEN_CODE
         )]
+        #[case::negative_skip(
+            CommandError::NegativeSkip {
+                skip: -1,
+                span: ARGUMENT_SPAN,
+            },
+            NEGATIVE_SKIP_CODE
+        )]
         fn carries_the_code_and_the_span_of_each_argument_error(
             #[case] error: CommandError,
             #[case] code: &str,
@@ -1453,129 +1563,141 @@ mod tests {
         }
 
         #[rstest]
-        fn git_errors_carry_stable_codes() -> Result<(), TestError> {
-            let cases = [
-                (
-                    CommandError::from(GixError::Open {
-                        path: PathBuf::from(MISSING_PATH),
-                        source: gix_error()?,
-                    }),
-                    OPEN_FAILED_CODE,
-                ),
-                (
-                    CommandError::from(GixError::Revision {
-                        expression: "nope".to_owned(),
-                        source: gix_error()?,
-                    }),
-                    BAD_REVISION_CODE,
-                ),
-                (
-                    CommandError::from(GixError::Shorten {
-                        expression: "nope".to_owned(),
-                        source: gix_error()?,
-                    }),
-                    BAD_REVISION_CODE,
-                ),
-                (
-                    CommandError::from(GixError::Head(gix_error()?)),
-                    BAD_REVISION_CODE,
-                ),
-                (
-                    CommandError::from(GixError::Walk(gix_error()?)),
-                    WALK_FAILED_CODE,
-                ),
-                (
-                    CommandError::from(GixError::Commit {
-                        id: "abc".to_owned(),
-                        source: gix_error()?,
-                    }),
-                    COMMIT_UNREADABLE_CODE,
-                ),
-                (
-                    CommandError::from(GixError::RepositoryGone {
-                        git_dir: PathBuf::from("/gone/.git"),
-                    }),
-                    REPOSITORY_GONE_CODE,
-                ),
-                (
-                    CommandError::from(GixError::Spawn(io::Error::other("no thread"))),
-                    IO_CODE,
-                ),
-                (
-                    CommandError::from(GixError::RefRead(gix_error()?)),
-                    REF_READ_FAILED_CODE,
-                ),
-                (
-                    CommandError::from(GixError::DanglingRef {
-                        name: "refs/heads/main".to_owned(),
-                    }),
-                    REF_READ_FAILED_CODE,
-                ),
-                (
-                    CommandError::from(GixError::RefMoved {
-                        name: "refs/heads/main".to_owned(),
-                        expected: RefExpect::Missing,
-                        actual: Some(RefTarget::Object(ACTUAL_OID.to_owned())),
-                    }),
-                    REF_MOVED_CODE,
-                ),
-                (
-                    CommandError::from(GixError::RefUpdate {
-                        name: "refs/heads/main".to_owned(),
-                        source: gix_error()?,
-                    }),
-                    REF_UPDATE_FAILED_CODE,
-                ),
-                (
-                    CommandError::from(GixError::InvalidRefName {
-                        name: "main".to_owned(),
-                        detail: "missing the `refs/` prefix".to_owned(),
-                    }),
-                    INVALID_REF_NAME_CODE,
-                ),
-                (
-                    CommandError::from(GixError::ShortLen {
-                        len: 3,
-                        detail: "below the minimum of 4".to_owned(),
-                    }),
-                    INVALID_SHORT_LEN_CODE,
-                ),
-            ];
+        #[case::open(
+            CommandError::from(GixError::Open {
+                path: PathBuf::from(MISSING_PATH),
+                source: gix_error(),
+            }),
+            OPEN_FAILED_CODE
+        )]
+        #[case::revision(
+            CommandError::from(GixError::Revision {
+                expression: "nope".to_owned(),
+                source: gix_error(),
+            }),
+            BAD_REVISION_CODE
+        )]
+        #[case::shorten(
+            CommandError::from(GixError::Shorten {
+                expression: "nope".to_owned(),
+                source: gix_error(),
+            }),
+            BAD_REVISION_CODE
+        )]
+        #[case::head(CommandError::from(GixError::Head(gix_error())), BAD_REVISION_CODE)]
+        #[case::walk(CommandError::from(GixError::Walk(gix_error())), WALK_FAILED_CODE)]
+        #[case::commit(
+            CommandError::from(GixError::Commit {
+                id: "abc".to_owned(),
+                source: gix_error(),
+            }),
+            COMMIT_UNREADABLE_CODE
+        )]
+        #[case::repository_gone(
+            CommandError::from(GixError::RepositoryGone {
+                git_dir: PathBuf::from("/gone/.git"),
+            }),
+            REPOSITORY_GONE_CODE
+        )]
+        #[case::spawn(
+            CommandError::from(GixError::Spawn(io::Error::other("no thread"))),
+            IO_CODE
+        )]
+        #[case::walker_panicked(CommandError::from(GixError::WalkerPanicked), WALKER_PANICKED_CODE)]
+        #[case::ref_read(
+            CommandError::from(GixError::RefRead(gix_error())),
+            REF_READ_FAILED_CODE
+        )]
+        #[case::dangling_ref(
+            CommandError::from(GixError::DanglingRef {
+                name: "refs/heads/main".to_owned(),
+            }),
+            REF_READ_FAILED_CODE
+        )]
+        #[case::ref_moved(
+            CommandError::from(GixError::RefMoved {
+                name: "refs/heads/main".to_owned(),
+                expected: RefExpect::Missing,
+                actual: Some(RefTarget::Object(ACTUAL_OID.to_owned())),
+            }),
+            REF_MOVED_CODE
+        )]
+        #[case::ref_update(
+            CommandError::from(GixError::RefUpdate {
+                name: "refs/heads/main".to_owned(),
+                source: gix_error(),
+            }),
+            REF_UPDATE_FAILED_CODE
+        )]
+        #[case::invalid_ref_name(
+            CommandError::from(GixError::InvalidRefName {
+                name: "main".to_owned(),
+                detail: "missing the `refs/` prefix".to_owned(),
+            }),
+            INVALID_REF_NAME_CODE
+        )]
+        #[case::pathspec(
+            CommandError::from(GixError::Pathspec {
+                spec: ":(nonsense)x".to_owned(),
+                source: gix_error(),
+            }),
+            INVALID_PATHSPEC_CODE
+        )]
+        #[case::pathspec_attributes(
+            CommandError::from(GixError::PathspecAttributes {
+                spec: ":(attr:linguist-vendored)x".to_owned(),
+            }),
+            INVALID_PATHSPEC_CODE
+        )]
+        #[case::short_len(
+            CommandError::from(GixError::ShortLen {
+                len: 3,
+                detail: "below the minimum of 4".to_owned(),
+            }),
+            INVALID_SHORT_LEN_CODE
+        )]
+        #[case::not_a_commit(
+            CommandError::from(GixError::NotACommit {
+                expression: "HEAD^{tree}".to_owned(),
+                kind: "tree".to_owned(),
+            }),
+            NOT_A_COMMIT_CODE
+        )]
+        #[case::path_outside_repository(
+            CommandError::from(GixError::PathOutsideRepository {
+                path: "../outside".to_owned(),
+            }),
+            PATH_OUTSIDE_REPOSITORY_CODE
+        )]
+        fn git_errors_carry_stable_codes(#[case] error: CommandError, #[case] code: &str) {
+            let labeled = error.into_labeled(Span::test_data());
 
-            for (error, code) in cases {
-                let labeled = error.into_labeled(Span::test_data());
-
-                assert_eq!(labeled.code.as_deref(), Some(code));
-            }
-
-            Ok(())
+            assert_eq!(labeled.code.as_deref(), Some(code));
         }
 
         #[rstest]
-        fn located_shorten_failures_carry_the_git_code() -> Result<(), TestError> {
+        fn located_shorten_failures_carry_the_git_code() {
             let labeled = CommandError::Located {
                 span: Span::test_data(),
                 source: GixError::Shorten {
                     expression: "nope".to_owned(),
-                    source: gix_error()?,
+                    source: gix_error(),
                 },
             }
             .into_labeled(Span::test_data());
 
             assert_eq!(labeled.code.as_deref(), Some(BAD_REVISION_CODE));
-
-            Ok(())
         }
 
         #[rstest]
-        fn unopenable_handles_carry_the_open_failed_code() -> Result<(), TestError> {
+        fn unopenable_handles_carry_the_open_failed_code() {
             let handle_span = Span::test_data();
             let unopenable = CommandError::HandleOpenFailed {
                 path: PathBuf::from(MISSING_PATH),
                 span: handle_span,
                 source: GixError::Open {
                     path: PathBuf::from(MISSING_PATH),
-                    source: gix_error()?,
+                    source: gix_error(),
                 },
             };
 
@@ -1583,8 +1705,6 @@ mod tests {
                 unopenable.into_labeled(handle_span).code.as_deref(),
                 Some(OPEN_FAILED_CODE)
             );
-
-            Ok(())
         }
     }
 

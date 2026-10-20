@@ -12,7 +12,10 @@ mod rev;
 pub use self::{
     error::CommandError,
     gix::{CATEGORY, Gix, help_call},
-    input::{acquire_handle, argument_span, flag_arg, handle_from, input_value, positional_arg},
+    input::{
+        acquire_handle, argument_span, flag_arg, handle_from, input_value, non_blank_revision,
+        optional_arg, positional_arg, switch_arg,
+    },
     log::Log,
     oid::{is_full_oid, is_hexadecimal, require_full_oid},
     open::Open,
