@@ -12,6 +12,7 @@
     )
 )]
 
+mod config;
 mod error;
 #[cfg(test)]
 mod fixtures;
@@ -25,6 +26,7 @@ mod side;
 pub use gix::pathspec::Pattern;
 
 pub use self::{
+    config::{config_get, validate_config_key},
     error::GixError,
     log::{
         CommitInfo, CommitLog, FileChange, FileChangeKind, FileStat, LogSettings, LogStart,

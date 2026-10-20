@@ -20,6 +20,9 @@
 //! entry outside the repository points at that entry (`gix::path-outside-repository`), and an
 //! invalid or unsupported `--paths` pathspec points at that entry (`gix::invalid-pathspec`).
 //!
+//! An invalid `gix config get` key points at the key (`gix::invalid-config-key`); a value that is
+//! not UTF-8 points at the key too (`gix::config-value-not-utf8`).
+//!
 //! A handle whose repository is gone (`gix::repository-gone`) or can no longer be opened
 //! (`gix::open-failed`) points at the value that carried the handle.
 //!
@@ -62,6 +65,8 @@ const INVALID_REF_NAME_CODE: &str = "gix::invalid-ref-name";
 const INVALID_SHORT_LEN_CODE: &str = "gix::invalid-short-len";
 const UNBORN_HEAD_CODE: &str = "gix::unborn-head";
 const MISSING_EXPECT_CODE: &str = "gix::missing-expect";
+const INVALID_CONFIG_KEY_CODE: &str = "gix::invalid-config-key";
+const CONFIG_VALUE_NOT_UTF8_CODE: &str = "gix::config-value-not-utf8";
 
 /// Every stable code an error of this plugin can carry.
 #[cfg(test)]
@@ -95,6 +100,8 @@ const ALL_CODES: &[&str] = &[
     INVALID_SHORT_LEN_CODE,
     UNBORN_HEAD_CODE,
     MISSING_EXPECT_CODE,
+    INVALID_CONFIG_KEY_CODE,
+    CONFIG_VALUE_NOT_UTF8_CODE,
 ];
 
 const INVALID_SIDE_LABEL: &str = "invalid side";
@@ -107,6 +114,9 @@ const REF_MOVED_LABEL: &str = "the reference does not hold the value expected he
 const PATH_OUTSIDE_REPOSITORY_LABEL: &str =
     "this path is outside the repository; paths are relative to the current directory";
 const PATHSPEC_ATTRIBUTES_LABEL: &str = "attribute pathspecs such as :(attr:...) are not supported";
+const INVALID_CONFIG_KEY_LABEL: &str =
+    "expected a key like `section.name` or `section.subsection.name`";
+const CONFIG_VALUE_NOT_UTF8_LABEL: &str = "the value of this key is not valid UTF-8";
 
 /// Label for a repository that was found but cannot be opened.
 const UNOPENABLE_LABEL: &str =
@@ -135,7 +145,7 @@ pub enum CommandError {
     /// The git layer rejected an argument: a revision it could not resolve, shorten or that names
     /// no commit, a short length out of range, a reference name that is not valid, a reference
     /// that moved, a `--paths` entry outside the repository, or a `--paths` entry that is not a
-    /// supported pathspec.
+    /// supported pathspec, or a `gix config get` key that is malformed or a value that is not UTF-8.
     #[error("{source}")]
     Located {
         /// Span of the argument the failure is attributed to, chosen by the command that raised it.
@@ -723,6 +733,11 @@ impl CommandError {
                     source: _source,
                 } => Some("this pathspec cannot be parsed"),
                 GixError::PathspecAttributes { spec: _spec } => Some(PATHSPEC_ATTRIBUTES_LABEL),
+                GixError::InvalidConfigKey { key: _key } => Some(INVALID_CONFIG_KEY_LABEL),
+                GixError::ConfigValueNotUtf8 {
+                    key: _key,
+                    source: _source,
+                } => Some(CONFIG_VALUE_NOT_UTF8_LABEL),
                 _ => None,
             },
             Self::WrongInput(_) | Self::Git(_) => None,
@@ -873,6 +888,11 @@ const fn git_code(error: &GixError) -> &'static str {
             len: _len,
             detail: _detail,
         } => INVALID_SHORT_LEN_CODE,
+        GixError::InvalidConfigKey { key: _key } => INVALID_CONFIG_KEY_CODE,
+        GixError::ConfigValueNotUtf8 {
+            key: _key,
+            source: _source,
+        } => CONFIG_VALUE_NOT_UTF8_CODE,
     }
 }
 
@@ -1252,6 +1272,28 @@ mod tests {
         }
 
         #[rstest]
+        fn points_an_invalid_config_key_at_its_span_with_a_label() {
+            let key_span = Span::new(3, 9);
+
+            let labeled = CommandError::Located {
+                span: key_span,
+                source: GixError::InvalidConfigKey {
+                    key: "nodot".to_owned(),
+                },
+            }
+            .into_labeled(Span::test_data());
+
+            assert_eq!(labeled.labels.first().map(|l| l.span), Some(key_span));
+
+            assert!(
+                labeled
+                    .labels
+                    .first()
+                    .is_some_and(|label| !label.text.is_empty())
+            );
+        }
+
+        #[rstest]
         fn labels_an_unresolved_revision_with_its_reason() {
             let labeled = CommandError::Located {
                 span: Span::test_data(),
@@ -1511,6 +1553,9 @@ mod tests {
     mod codes {
         use super::*;
 
+        /// A byte that is not valid UTF-8 on its own.
+        const NOT_UTF8_BYTE: u8 = 0xff;
+
         // No command parses sides yet, so these variants cannot be triggered by a script.
         #[rstest]
         #[case::invalid_side_type(
@@ -1669,6 +1714,12 @@ mod tests {
             }),
             PATH_OUTSIDE_REPOSITORY_CODE
         )]
+        #[case::invalid_config_key(
+            CommandError::from(GixError::InvalidConfigKey {
+                key: "nodot".to_owned(),
+            }),
+            INVALID_CONFIG_KEY_CODE
+        )]
         fn git_errors_carry_stable_codes(#[case] error: CommandError, #[case] code: &str) {
             let labeled = error.into_labeled(Span::test_data());
 
@@ -1690,8 +1741,32 @@ mod tests {
         }
 
         #[rstest]
+        fn config_values_that_are_not_utf8_carry_their_code() -> Result<(), TestError> {
+            let Err(decoding) = String::from_utf8(vec![NOT_UTF8_BYTE]) else {
+                return Err(TestError::Failure("expected a UTF-8 error".to_owned()));
+            };
+
+            let key_span = Span::new(3, 6);
+
+            let labeled = CommandError::Located {
+                span: key_span,
+                source: GixError::ConfigValueNotUtf8 {
+                    key: "a.b".to_owned(),
+                    source: decoding,
+                },
+            }
+            .into_labeled(Span::test_data());
+
+            assert_eq!(labeled.code.as_deref(), Some(CONFIG_VALUE_NOT_UTF8_CODE));
+            assert_eq!(labeled.labels.first().map(|l| l.span), Some(key_span));
+
+            Ok(())
+        }
+
+        #[rstest]
         fn unopenable_handles_carry_the_open_failed_code() {
             let handle_span = Span::test_data();
+
             let unopenable = CommandError::HandleOpenFailed {
                 path: PathBuf::from(MISSING_PATH),
                 span: handle_span,
