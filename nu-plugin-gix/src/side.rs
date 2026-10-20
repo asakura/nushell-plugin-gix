@@ -22,7 +22,8 @@
 use crate::commands::CommandError;
 use crate::commands::{is_full_oid, is_hexadecimal};
 
-use nu_protocol::{Value, record};
+use nu_plugin_gix_core::{OpenRepository, Side};
+use nu_protocol::{Span, Value, record};
 
 const HEAD: &str = "head";
 const HEAD_UPPER: &str = "HEAD";
@@ -41,6 +42,26 @@ pub enum SideArg {
     Worktree,
     /// A non-empty revision expression awaiting repository resolution.
     Rev(String),
+}
+
+impl SideArg {
+    /// Resolves this side in `opened`: symbolic sides map directly, a revision is resolved by git.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError::Located`] at `span` when the revision does not resolve.
+    #[must_use = "the resolved side is needed to read or write the operand"]
+    pub fn resolve(&self, opened: &OpenRepository, span: Span) -> Result<Side, CommandError> {
+        let side = match self {
+            Self::Head => Side::Head,
+            Self::Index => Side::Index,
+            Self::Worktree => Side::Worktree,
+            Self::Rev(expression) => Side::resolve_revision(opened, expression)
+                .map_err(|source| CommandError::Located { span, source })?,
+        };
+
+        Ok(side)
+    }
 }
 
 impl TryFrom<&Value> for SideArg {
@@ -125,10 +146,24 @@ fn parse_revision(value: &str, span: nu_protocol::Span) -> Result<SideArg, Comma
 mod tests {
     use super::*;
 
+    use nu_plugin_gix_core::{GixError, OpenRepository, RepositoryLocation};
+    use nu_plugin_gix_testing_support::{FixtureError, MAIN_BRANCH, TestRepo, test_repo};
     use nu_protocol::{Span, Value, record};
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use std::assert_matches;
+
+    #[derive(Debug, thiserror::Error)]
+    enum TestError {
+        #[error(transparent)]
+        Fixture(#[from] FixtureError),
+
+        #[error(transparent)]
+        Git(#[from] GixError),
+
+        #[error("Test failure: {0}")]
+        Failure(String),
+    }
 
     fn span(start: usize) -> Span {
         Span::new(start, start.saturating_add(1))
@@ -283,6 +318,62 @@ mod tests {
             let err = SideArg::try_from(&input);
 
             assert_matches!(err, Err(CommandError::InvalidSideField { field: REV_FIELD, got, span: found }) if got == "int" && found == field_span);
+        }
+    }
+
+    mod resolve {
+        use super::*;
+
+        /// A repository with two commits on `main`, opened for revision resolution.
+        #[fixture]
+        fn opened_repo() -> Result<(TestRepo, OpenRepository), TestError> {
+            let repo = test_repo()?;
+            let location = RepositoryLocation::discover(repo.dir.path())?;
+            let opened = OpenRepository::try_from(&location)?;
+
+            Ok((repo, opened))
+        }
+
+        #[rstest]
+        #[case::head(SideArg::Head, Side::Head)]
+        #[case::index(SideArg::Index, Side::Index)]
+        #[case::worktree(SideArg::Worktree, Side::Worktree)]
+        fn maps_symbolic_sides_to_their_side(
+            opened_repo: Result<(TestRepo, OpenRepository), TestError>,
+            #[case] side: SideArg,
+            #[case] expected: Side,
+        ) -> Result<(), TestError> {
+            let (_repo, opened) = opened_repo?;
+
+            assert_matches!(side.resolve(&opened, span(1)), Ok(actual) if actual == expected);
+            Ok(())
+        }
+
+        #[rstest]
+        fn resolves_a_revision_to_a_rev_side(
+            opened_repo: Result<(TestRepo, OpenRepository), TestError>,
+        ) -> Result<(), TestError> {
+            let (_repo, opened) = opened_repo?;
+            let side = SideArg::Rev(MAIN_BRANCH.to_owned());
+
+            assert_matches!(side.resolve(&opened, span(1)), Ok(Side::Rev(_)));
+            Ok(())
+        }
+
+        #[rstest]
+        fn unresolvable_revision_surfaces_as_a_coded_labeled_error(
+            opened_repo: Result<(TestRepo, OpenRepository), TestError>,
+        ) -> Result<(), TestError> {
+            let (_repo, opened) = opened_repo?;
+            let input_span = span(9);
+            let err = SideArg::Rev("no-such-branch".to_owned())
+                .resolve(&opened, input_span)
+                .err()
+                .ok_or_else(|| TestError::Failure("unresolvable revision resolved".to_owned()))?;
+            let labeled = err.into_labeled(input_span);
+
+            assert_matches!(labeled.code.as_deref(), Some(code) if !code.is_empty());
+            Ok(())
         }
     }
 }
