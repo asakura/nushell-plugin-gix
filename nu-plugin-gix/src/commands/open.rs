@@ -144,8 +144,9 @@ mod tests {
     use crate::fixtures::plugin_test;
 
     use nu_plugin_gix_testing_support::{
-        AssertionError, CorruptTestRepo, FixtureError, TestRepo, assert_label_in_script,
-        corrupt_repo, eval_labeled_error, eval_value, pin_pwd, plain_dir, test_repo,
+        AssertionError, CorruptTestRepo, FixtureError, FixtureRepo as _, TestRepo,
+        assert_label_in_script, corrupt_repo, eval_labeled_error, eval_value, pin_pwd, plain_dir,
+        test_repo,
     };
     use nu_plugin_test_support::PluginTest;
     use nu_protocol::{PipelineData, ShellError, Span};

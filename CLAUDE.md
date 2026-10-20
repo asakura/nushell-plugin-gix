@@ -83,6 +83,8 @@ api     = "git module exposes domain types (CommitInfo, GixError) and plain-Rust
 # versions are pinned; they carry plain digests and derive Copy/Eq/serde (Spec is
 # documented by gix as suitable for serialization and thread movement). Repository-bound
 # gix types (Repository, an attached Spec, ...) remain banned from serialized handles.
+# exception: gix::pathspec::Pattern (re-exported by nu-plugin-gix-core as Pattern) may be held by src/commands: pathspec()
+# returns it and log() takes it. It is a plain, repository-independent value; commands only pass it through.
 errors  = "git::GixError is Nushell-free; commands::CommandError wraps it (#[from]) plus argument errors (e.g. NegativeLimit) and owns into_labeled(span), called only at run/stream-mapping boundaries"
 values  = "cdt values are stateful handles: they serialize only an id plus the self-describing fields needed to rebuild their state (git dir, sides, oids, validity stamp); the state itself (may hold gix types) lives plugin-side in a git-side registry that is only a cache"
 state   = "registry entries are Arc'd immutable snapshots + a stamp; every use validates the stamp: content-addressed state never goes stale; live state (index/worktree/refs/config) is revalidated on reads and compare-and-swap on writes (stale-changeset, nothing applied)"
@@ -93,6 +95,7 @@ doctest = "bin crate => no doctests; if the git side needs tested examples, extr
 
 [antirot]
 rules = "del dead-code (no commented-out blocks; no #[expect(dead_code)] on prod items); no-TODO (CI greps for TODO/FIXME/HACK/XXX in *.rs); ≥2-callers; docs-same-commit; tests-guard-intent; no-defensive-impossible"
+ctor_exempt = "≥2-callers exempts a constructor only if ALL: (1) private fields, sole build site; (2) fallible resolution/validation the invariants depend on (returns Result); (3) inlining mixes that setup with unrelated work in the caller (e.g. log::Walk::new); builders, From/TryFrom, infallible field-copying ctors stay under the rule"
 # exception: nu-plugin-gix-testing-support is exempt from ≥2-callers — a fixture there may have a single user,
 # because it encodes git's on-disk layout and keeps that knowledge out of the test modules
 

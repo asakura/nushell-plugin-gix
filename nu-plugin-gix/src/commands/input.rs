@@ -1,6 +1,6 @@
 //! Typed access to pipeline input and call arguments: handle-valued input, the raw value a command
-//! receives, the opened repository behind a handle, and argument reads that point their errors at
-//! the argument they came from.
+//! receives, the opened repository behind a handle, argument reads that point their errors at
+//! the argument they came from, and checks shared by commands such as a non-blank revision.
 
 use crate::cdt::{self, Handle, Repository};
 use crate::commands::{CommandError, error::WrongInput};
@@ -100,6 +100,39 @@ where
         })
 }
 
+/// Reads the switch `flag`: `true` when it is given; a read failure points at the flag.
+pub fn switch_arg(call: &EvaluatedCall, flag: &str) -> Result<bool, CommandError> {
+    call.has_flag(flag)
+        .map_err(|source| CommandError::InvalidArgument {
+            source: Box::new(source),
+            span: call.get_flag_span(flag).unwrap_or(call.head),
+        })
+}
+
+/// Reads the optional positional argument at `position`; a read failure points at the argument.
+pub fn optional_arg<T>(
+    call: &EvaluatedCall,
+    position: usize,
+) -> Result<Option<Spanned<T>>, CommandError>
+where
+    T: FromValue,
+{
+    call.opt::<Spanned<T>>(position)
+        .map_err(|source| CommandError::InvalidArgument {
+            source: Box::new(source),
+            span: argument_span(call, position),
+        })
+}
+
+/// Rejects a blank or whitespace-only revision expression at its own span.
+pub fn non_blank_revision(spec: Spanned<String>) -> Result<Spanned<String>, CommandError> {
+    if spec.item.trim().is_empty() {
+        return Err(CommandError::EmptyRevision { span: spec.span });
+    }
+
+    Ok(spec)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,7 +140,9 @@ mod tests {
     use crate::cdt::Repository;
 
     use nu_plugin_gix_core::Registry;
-    use nu_plugin_gix_testing_support::{FixtureError, HEAD_FILE, TestRepo, test_repo};
+    use nu_plugin_gix_testing_support::{
+        FixtureError, FixtureRepo as _, HEAD_FILE, TestRepo, test_repo,
+    };
     use nu_protocol::{ListStream, ShellError, Signals};
     use rstest::rstest;
 
@@ -118,6 +153,7 @@ mod tests {
     const UPSTREAM_FAILURE: &str = "upstream failed";
     const EXPECT_FLAG: &str = "expect";
     const MESSAGE_FLAG: &str = "message";
+    const ALL_SWITCH: &str = "all";
     const FIRST_POSITION: usize = 0;
     const SECOND_POSITION: usize = 1;
     const CALL_SPAN: Span = Span { start: 1, end: 7 };
@@ -433,6 +469,127 @@ mod tests {
             assert_eq!(
                 err.into_labeled(Span::test_data()).code.as_deref(),
                 Some(INVALID_ARGUMENT_CODE)
+            );
+
+            Ok(())
+        }
+    }
+
+    mod switch_arg {
+        use super::*;
+
+        #[rstest]
+        fn reads_an_absent_switch_as_false() -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN);
+            let set = switch_arg(&call, ALL_SWITCH)?;
+
+            assert!(!set, "got {set:?}");
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn reads_a_present_switch_as_true() -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN).with_flag(Spanned {
+                item: ALL_SWITCH,
+                span: FLAG_SPAN,
+            });
+            let set = switch_arg(&call, ALL_SWITCH)?;
+
+            assert!(set, "got {set:?}");
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn reports_an_unreadable_switch_at_the_flag() -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN).with_named(
+                Spanned {
+                    item: ALL_SWITCH,
+                    span: FLAG_SPAN,
+                },
+                Value::int(UNREADABLE_VALUE, Span::test_data()),
+            );
+
+            let err = switch_arg(&call, ALL_SWITCH)
+                .err()
+                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+            assert_matches!(&err, CommandError::InvalidArgument { span, .. } if *span == FLAG_SPAN);
+
+            Ok(())
+        }
+    }
+
+    /// Optional positional reads: an absent argument is `None`, an unreadable one points at the argument.
+    mod optional_arg {
+        use super::*;
+
+        #[rstest]
+        fn reads_an_absent_argument_as_none() -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN);
+            let arg = optional_arg::<String>(&call, FIRST_POSITION)?;
+
+            assert!(arg.is_none(), "got {arg:?}");
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn reads_a_present_argument_with_its_span() -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN)
+                .with_positional(Value::string(PRESENT_VALUE, ARGUMENT_SPAN));
+
+            let arg = optional_arg::<String>(&call, FIRST_POSITION)?
+                .ok_or_else(|| TestError::Failure("expected an argument value".to_owned()))?;
+
+            assert_eq!(arg.item, PRESENT_VALUE);
+            assert_eq!(arg.span, ARGUMENT_SPAN);
+
+            Ok(())
+        }
+
+        #[rstest]
+        fn reports_an_unreadable_argument_at_its_value() -> Result<(), TestError> {
+            let call = EvaluatedCall::new(CALL_SPAN)
+                .with_positional(Value::int(UNREADABLE_VALUE, ARGUMENT_SPAN));
+
+            let err = optional_arg::<String>(&call, FIRST_POSITION)
+                .err()
+                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+            assert_matches!(&err, CommandError::InvalidArgument { span, .. } if *span == ARGUMENT_SPAN);
+
+            assert_eq!(
+                err.into_labeled(Span::test_data()).code.as_deref(),
+                Some(INVALID_ARGUMENT_CODE)
+            );
+
+            Ok(())
+        }
+    }
+
+    /// Exact-span checks of the revision guard, whose failures never reach a script.
+    mod non_blank_revision {
+        use super::*;
+
+        #[rstest]
+        #[case::empty("")]
+        #[case::whitespace(" \t\n")]
+        fn rejects_a_blank_revision_at_its_span(#[case] input: &str) -> Result<(), TestError> {
+            let spec = Spanned {
+                item: input.to_owned(),
+                span: ARGUMENT_SPAN,
+            };
+
+            let err = non_blank_revision(spec)
+                .err()
+                .ok_or_else(|| TestError::Failure("expected an error".to_owned()))?;
+
+            assert_matches!(
+                &err,
+                CommandError::EmptyRevision { span } if *span == ARGUMENT_SPAN,
+                "got {err:?}"
             );
 
             Ok(())

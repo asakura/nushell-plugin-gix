@@ -3,7 +3,8 @@
 use crate::GixPlugin;
 use crate::cdt::{Handle, Repository};
 use crate::commands::{
-    CATEGORY, CommandError, acquire_handle, flag_arg, handle_from, positional_arg,
+    CATEGORY, CommandError, acquire_handle, flag_arg, handle_from, non_blank_revision,
+    positional_arg,
 };
 
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
@@ -130,7 +131,7 @@ fn rev_call(
         .map(parse_short_len)
         .transpose()?;
 
-    let spec = parse_spec(positional_arg::<String>(call, SPEC_POSITION)?)?;
+    let spec = non_blank_revision(positional_arg::<String>(call, SPEC_POSITION)?)?;
 
     run_rev(registry, repo, &spec, short_len, call.head, input.span())
 }
@@ -174,15 +175,6 @@ const fn resolve_failure(source: GixError, spec_span: Span, short_len_span: Span
     };
 
     CommandError::Located { span, source }
-}
-
-/// Rejects blank or whitespace-only revision expressions at their own span.
-fn parse_spec(spec: Spanned<String>) -> Result<Spanned<String>, CommandError> {
-    if spec.item.trim().is_empty() {
-        return Err(CommandError::EmptyRevision { span: spec.span });
-    }
-
-    Ok(spec)
 }
 
 /// Converts the requested short length; negative values are rejected at the span of the value.
@@ -236,8 +228,8 @@ mod tests {
 
     use nu_plugin_gix_core::{RepositoryLocation, RevKind};
     use nu_plugin_gix_testing_support::{
-        AssertionError, FixtureError, TestRepo, assert_label_in_script, eval_labeled_error,
-        eval_value, record_column, test_repo,
+        AssertionError, FixtureError, FixtureRepo as _, TestRepo, assert_label_in_script,
+        eval_labeled_error, eval_value, record_column, test_repo,
     };
     use nu_plugin_test_support::PluginTest;
     use nu_protocol::ShellError;
@@ -476,33 +468,6 @@ mod tests {
 
                 Ok(())
             }
-        }
-    }
-
-    /// Exact-span checks of the argument parser, whose failures never reach a script.
-    mod parse_spec {
-        use super::*;
-
-        #[rstest]
-        #[case::empty("")]
-        #[case::whitespace(" \t\n")]
-        fn rejects_a_blank_revision_at_its_span(#[case] input: &str) -> Result<(), TestError> {
-            let spec = Spanned {
-                item: input.to_owned(),
-                span: ARGUMENT_SPAN,
-            };
-
-            let err = parse_spec(spec)
-                .err()
-                .ok_or_else(|| TestError::Failure(EXPECTED_ERROR.to_owned()))?;
-
-            assert_matches!(
-                &err,
-                CommandError::EmptyRevision { span } if *span == ARGUMENT_SPAN,
-                "got {err:?}"
-            );
-
-            Ok(())
         }
     }
 

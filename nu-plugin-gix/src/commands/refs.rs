@@ -3,7 +3,7 @@
 use crate::GixPlugin;
 use crate::cdt::{Handle, Repository};
 use crate::commands::{
-    CATEGORY, CommandError, acquire_handle, argument_span, flag_arg, handle_from, help_call,
+    CATEGORY, CommandError, acquire_handle, flag_arg, handle_from, help_call, optional_arg,
     positional_arg, require_full_oid,
 };
 
@@ -290,12 +290,7 @@ fn run_list(
 
 /// Reads the optional prefix; a blank prefix lists every reference. A read failure points at the argument.
 fn prefix_arg(call: &EvaluatedCall) -> Result<String, CommandError> {
-    let prefix = call
-        .opt::<Spanned<String>>(PREFIX_POSITION)
-        .map_err(|source| CommandError::InvalidArgument {
-            source: Box::new(source),
-            span: argument_span(call, PREFIX_POSITION),
-        })?;
+    let prefix = optional_arg::<String>(call, PREFIX_POSITION)?;
 
     Ok(prefix
         .filter(|prefix| !prefix.item.trim().is_empty())
@@ -537,9 +532,9 @@ mod tests {
     use crate::fixtures::{RepoInputError, plugin_test, repo_input};
 
     use nu_plugin_gix_testing_support::{
-        AssertionError, FixtureError, GIT_DIR, MAIN_BRANCH, TaggedTestRepo, TestRepo,
-        UnbornTestRepo, assert_label_in_script, eval_labeled_error, eval_value, first_row,
-        record_column, tagged_repo, test_repo, unborn_repo,
+        AssertionError, FixtureError, FixtureRepo as _, GIT_DIR, MAIN_BRANCH, TaggedTestRepo,
+        TestRepo, UnbornTestRepo, assert_label_in_script, eval_labeled_error, eval_value,
+        first_row, record_column, tagged_repo, test_repo, unborn_repo,
     };
     use nu_plugin_test_support::PluginTest;
     use nu_protocol::ShellError;
