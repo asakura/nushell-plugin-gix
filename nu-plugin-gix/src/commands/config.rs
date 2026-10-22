@@ -1,5 +1,9 @@
 //! `gix config`: read the layered git configuration.
 
+#[cfg(test)]
+#[path = "config_tests.rs"]
+mod tests;
+
 use crate::GixPlugin;
 use crate::cdt::{Handle, Repository};
 use crate::commands::config_known::{KnownKey, Multi, TABLE, ValueKind};
@@ -42,7 +46,7 @@ const NAME_VARIABLE: &str = "name";
 
 /// Help text before the list of bool keys.
 const HELP_BOOL_INTRO: &str = "Values come from the system, global, local and worktree configuration and their includes. \
-        A key set in several layers has the value of the highest-priority layer. Writes are not supported.\n\
+        A key set in several layers has the value of the highest-priority layer.\n\
         Without --type, a key of the plugin's known-key table is converted to the kind listed there: bool \
         (true, yes, on, false, no, off), int (as git reads integers, such as 1, 0x10 or 2k) or text. Every other \
         key is text, so `user.name = 1k` gives the string \"1k\". The bool keys are ";
@@ -541,7 +545,3 @@ where
         .collect::<Vec<_>>()
         .join(HELP_KEY_SEPARATOR)
 }
-
-#[cfg(test)]
-#[path = "config_tests.rs"]
-mod tests;

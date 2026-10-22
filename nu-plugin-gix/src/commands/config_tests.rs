@@ -200,6 +200,7 @@ mod signature {
     #[rstest]
     fn get_takes_a_type_flag_with_a_short_form() -> Result<(), TestError> {
         let signature = SimplePluginCommand::signature(&ConfigGet);
+
         let Some(flag) = signature.get_long_flag(TYPE_FLAG) else {
             return Err(TestError::Failure(format!("no --{TYPE_FLAG} flag")));
         };
@@ -611,7 +612,6 @@ mod eval {
             let mut plugin = plugin_test?;
             let repo = test_repo?;
             let script = typed_script(MALFORMED_KEY, VALUE_MISSING_TYPE);
-
             let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
 
             assert_eq!(labeled.code.as_deref(), Some(INVALID_KEY_CODE));
@@ -628,7 +628,6 @@ mod eval {
             let mut plugin = plugin_test?;
             let repo = test_repo?;
             let script = typed_script(LOCAL_KEY, UNKNOWN_TYPE);
-
             let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
 
             assert_eq!(labeled.code.as_deref(), Some(UNKNOWN_TYPE_CODE));
@@ -665,7 +664,6 @@ mod eval {
             let mut plugin = plugin_test?;
             let repo = test_repo?;
             let script = typed_script(MALFORMED_KEY, UNKNOWN_TYPE);
-
             let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
 
             assert_eq!(labeled.code.as_deref(), Some(UNKNOWN_TYPE_CODE));
@@ -689,6 +687,7 @@ mod eval {
                 &typed_script(TILDE_KEY, PATH_TYPE),
                 repo_input(repo.path())?,
             )?;
+
             let expanded = Path::new(value.as_str()?);
 
             assert!(expanded.is_absolute(), "got {value:?}");

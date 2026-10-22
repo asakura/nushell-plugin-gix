@@ -48,6 +48,10 @@
 //!
 //! A negative `--limit` or `--skip` points at its value.
 
+#[cfg(test)]
+#[path = "error_tests.rs"]
+mod tests;
+
 use super::oid::{SHA1_HEX_LEN, SHA256_HEX_LEN};
 
 use nu_plugin_gix_core::GixError;
@@ -1192,7 +1196,3 @@ const fn git_code(error: &GixError) -> &'static str {
 pub(super) fn error_codes_line(groups: &[&[&str]]) -> String {
     [CODES_LINE_PREFIX, &groups.concat().join(CODES_SEPARATOR)].concat()
 }
-
-#[cfg(test)]
-#[path = "error_tests.rs"]
-mod tests;
