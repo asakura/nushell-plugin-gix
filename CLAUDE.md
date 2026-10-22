@@ -103,6 +103,13 @@ ctor_exempt = "≥2-callers exempts a constructor only if ALL: (1) private field
 # Every arrow is a BLOCKING gate — do not proceed until the current step is complete
 steps = "Explore(read code before writing any) → Plan(>3 files: write plan+get confirmation) → Test(new behavior→failing tests first; regression→reproducing test BEFORE fix) → Impl → check(fix every warning before continuing) → fmt → Docs(update //! for every pattern change)"
 cmd   = "cargo fmt --check && cargo check --all-targets && cargo clippy --all-targets && cargo test && cargo deny check"
+design    = "a change that adds or changes a domain type, a public core fn, a semantic rule (precedence, multi-value, case, null/valueless) or a command's output shape is a DESIGN change: it goes through rust-planner, whatever its size; the orchestrator never writes plans, step prompts that add behaviour, or code itself"
+redesign  = "a user decision or bug report that changes a design change mid-execution stops execution: the orchestrator sends it to rust-planner as a D6 amendment, waits for the updated Design tables, then resumes; no executor gets a semantic change straight from chat"
+fixes     = "a bug fix that touches a D1 type, a D2 owner or a D4 rule is a design change (see design); a fix that only rewrites inputs or adds a special case to hide the symptom is rejected"
+orchestrator = "the orchestrator only dispatches steps, relays reports, keeps the smell ledger and asks the user for decisions; it may run read-only checks and the gate, never edit src/"
+review    = "before any feat/fix commit that contains a design change: the rust-reviewer agent (never the orchestrator, the planner that wrote the plan, or an executor) reviews git diff <base>.. against the plan's Design section and writes PASS/FAIL per item into the plan; any FAIL blocks the commit and goes back to rust-planner as a design defect"
+smells    = "every design smell an executor reports goes into the plan's '## Smell ledger' (smell, file:symbol, step) with a resolution: fixed in step N | issue #N | rejected because <reason> (user-confirmed); a commit is blocked while any row is unresolved"
+commit_gate = "commit = cmd green AND rust-reviewer PASS AND smell ledger resolved; a green cmd alone never authorizes a commit"
 
 [examples]
 suppress = '''
