@@ -32,7 +32,9 @@ gix = { version = "0.89", default-features = false, features = [
 ] }
 miette = "7.6"
 nu-cmd-lang = { version = "0.112.2", default-features = false }
-nu-command = { version = "0.112.2", default-features = false, features = ["os"] }
+nu-command = { version = "0.112.2", default-features = false, features = [
+  "os",
+] }
 nu-plugin = "0.112.2"
 nu-plugin-gix-core = { version = "0.1.0", path = "nu-plugin-gix-core" }
 nu-plugin-gix-testing-support = { path = "nu-plugin-gix-testing-support" }
@@ -162,7 +164,7 @@ unused_trait_names = "deny"
 
 [profile.dev]
 split-debuginfo = "unpacked"
-debug = 1
+debug = "line-tables-only"
 overflow-checks = true
 
 [profile.dev.package."*"]
