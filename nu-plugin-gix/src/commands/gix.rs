@@ -159,7 +159,7 @@ mod tests {
         const EXPECTED_COMMANDS: [&str; 10] = [
             "gix",
             "gix config",
-            "gix config get",
+            "gix config list",
             "gix log",
             "gix open",
             "gix ref",
@@ -172,11 +172,12 @@ mod tests {
         #[rstest]
         fn matches_the_expected_command_names() {
             let commands = GixPlugin::default().commands();
-
             let mut registered: Vec<&str> = commands.iter().map(|command| command.name()).collect();
+
             registered.sort_unstable();
 
             let mut expected = EXPECTED_COMMANDS.to_vec();
+
             expected.sort_unstable();
 
             assert_eq!(registered, expected);

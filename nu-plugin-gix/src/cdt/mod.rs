@@ -1,4 +1,5 @@
-//! Custom Nushell data types: plain serializable handles with no `gix` types.
+//! Custom Nushell data types: plain serializable handles with no repository-bound `gix` types
+//! (only `ObjectId` and `Spec`, see `.claude/rules/plugin.md`, section `gix_exceptions`).
 
 mod changeset;
 mod handle;

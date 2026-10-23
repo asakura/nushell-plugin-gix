@@ -117,19 +117,11 @@ fn run_open(
                     GixError::NotFound {
                         path: _path,
                         source: _source,
-                    } => CommandError::NotARepository {
-                        path: item,
-                        span,
-                        source,
-                    },
+                    } => CommandError::not_a_repository(item, span, source),
                     GixError::Open {
                         path: _path,
                         source: _source,
-                    } => CommandError::OpenFailed {
-                        path: item,
-                        span,
-                        source,
-                    },
+                    } => CommandError::open_failed(item, span, source),
                     _ => CommandError::Git(source),
                 })?,
         };

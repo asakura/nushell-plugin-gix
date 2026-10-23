@@ -3,6 +3,7 @@
 use crate::repository::OpenRepository;
 
 use gix::open::Options;
+use gix::sec::Trust;
 use nu_plugin_gix_testing_support::{FixtureRepo as _, TaggedTestRepo};
 
 use std::path::Path;
@@ -12,6 +13,14 @@ pub fn open_path(path: &Path) -> Result<OpenRepository, gix::Error> {
     Ok(OpenRepository::from_repository(gix::open_opts(
         path,
         Options::isolated(),
+    )?))
+}
+
+/// Opens the repository at `path` with the isolated options, but with only reduced trust for its own config files.
+pub fn open_untrusted(path: &Path) -> Result<OpenRepository, gix::Error> {
+    Ok(OpenRepository::from_repository(gix::open_opts(
+        path,
+        Options::isolated().with(Trust::Reduced),
     )?))
 }
 
