@@ -57,11 +57,7 @@ fn file_origin() -> Arc<Origin> {
 
 /// The key `a.b`, as `gix config get a.b` reads it.
 fn a_b_key() -> ConfigKey {
-    ConfigKey {
-        section: SectionName::new("a"),
-        subsection: None,
-        name: VariableName::new("b"),
-    }
+    ConfigKey::new(SectionName::from("a"), None, VariableName::from("b"))
 }
 
 /// A parse failure of gix's config parser, the `source` of `ConfigSectionUnreadable`.
@@ -422,6 +418,18 @@ mod into_labeled {
         assert_eq!(labeled.code.as_deref(), Some(UNKNOWN_CONFIG_TYPE_CODE));
         assert_eq!(labeled.labels.first().map(|l| l.span), Some(value_span));
         assert!(labeled.msg.contains("bogus"), "got {:?}", labeled.msg);
+    }
+
+    #[rstest]
+    fn points_an_unsupported_key_member_at_its_member() {
+        let member_span = Span::new(3, 9);
+
+        let labeled = CommandError::UnsupportedKeyMember { span: member_span }
+            .into_labeled(Span::test_data());
+
+        assert_eq!(labeled.code.as_deref(), Some(UNSUPPORTED_KEY_MEMBER_CODE));
+        assert!(!labeled.msg.is_empty(), "got {:?}", labeled.msg);
+        assert_eq!(labeled.labels.first().map(|l| l.span), Some(member_span));
     }
 
     #[rstest]
@@ -878,7 +886,7 @@ mod codes {
     /// A section whose bytes cannot be parsed again, as a `GixError::ConfigSectionUnreadable` carries it.
     fn section_unreadable() -> Result<GixError, TestError> {
         Ok(GixError::ConfigSectionUnreadable {
-            section: GroupPath::Section(SectionName::new("a")),
+            section: GroupPath::Section(SectionName::from("a")),
             source: parse_failure()?,
         })
     }
@@ -949,8 +957,8 @@ mod codes {
     )]
     #[case::config_name_clash(
             Ok(GixError::ConfigNameClash {
-                section: SectionName::new("a"),
-                name: VariableName::new("b"),
+                section: SectionName::from("a"),
+                name: VariableName::from("b"),
                 variable_origin: file_origin(),
                 subsection_origin: file_origin(),
             }),
@@ -964,8 +972,8 @@ mod codes {
     )]
     #[case::config_section_malformed(
             Ok(GixError::ConfigSectionMalformed {
-                section: GroupPath::Section(SectionName::new("a")),
-                fault: SectionFault::NameWithoutValue(VariableName::new("answer")),
+                section: GroupPath::Section(SectionName::from("a")),
+                fault: SectionFault::NameWithoutValue(VariableName::from("answer")),
             }),
             CONFIG_SECTION_MALFORMED_CODE,
             CONFIG_SECTION_MALFORMED_LABEL
@@ -995,8 +1003,8 @@ mod codes {
         let labeled = CommandError::Located {
             span: Span::test_data(),
             source: GixError::ConfigSectionMalformed {
-                section: GroupPath::Section(SectionName::new("gixtest")),
-                fault: SectionFault::NameWithoutValue(VariableName::new("answer")),
+                section: GroupPath::Section(SectionName::from("gixtest")),
+                fault: SectionFault::NameWithoutValue(VariableName::from("answer")),
             },
         }
         .into_labeled(Span::test_data());

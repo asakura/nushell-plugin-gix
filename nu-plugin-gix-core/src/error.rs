@@ -354,11 +354,7 @@ mod tests {
     }
 
     fn key() -> ConfigKey {
-        ConfigKey {
-            section: SectionName::new("core"),
-            subsection: None,
-            name: VariableName::new("bare"),
-        }
+        ConfigKey::new(SectionName::from("core"), None, VariableName::from("bare"))
     }
 
     fn origin(path: &str) -> Origin {
@@ -449,8 +445,8 @@ mod tests {
         #[rstest]
         fn name_clash_names_section_name_and_both_origins() {
             let error = GixError::ConfigNameClash {
-                section: SectionName::new("core"),
-                name: VariableName::new("bare"),
+                section: SectionName::from("core"),
+                name: VariableName::from("bare"),
                 variable_origin: Arc::new(origin("/p/a")),
                 subsection_origin: Arc::new(origin("/p/b")),
             };
@@ -466,7 +462,7 @@ mod tests {
 
         #[rstest]
         #[case::name_without_value(
-            SectionFault::NameWithoutValue(VariableName::new("answer")),
+            SectionFault::NameWithoutValue(VariableName::from("answer")),
             "answer"
         )]
         #[case::value_without_name(SectionFault::ValueWithoutName, "value")]
@@ -475,7 +471,7 @@ mod tests {
             #[case] expected: &str,
         ) {
             let error = GixError::ConfigSectionMalformed {
-                section: GroupPath::Section(SectionName::new("gixtest")),
+                section: GroupPath::Section(SectionName::from("gixtest")),
                 fault,
             };
 
@@ -488,11 +484,11 @@ mod tests {
         #[rstest]
         fn subsection_key_renders_its_subsection() {
             let error = GixError::ConfigPathNotUtf8 {
-                key: ConfigKey {
-                    section: SectionName::new("remote"),
-                    subsection: Some(Subsection::new(b"origin")),
-                    name: VariableName::new("url"),
-                },
+                key: ConfigKey::new(
+                    SectionName::from("remote"),
+                    Some(Subsection::from(b"origin")),
+                    VariableName::from("url"),
+                ),
                 origin: Arc::new(origin("/p/config")),
             };
 

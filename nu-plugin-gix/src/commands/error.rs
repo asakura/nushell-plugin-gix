@@ -47,6 +47,9 @@
 //! (`gix::open-failed`) points at the value that carried the handle.
 //!
 //! A negative `--limit` or `--skip` points at its value.
+//!
+//! A cell path member of a `gix config get` key that is a number, `?` or `!` rather than plain text
+//! points at that member (`gix::config-unsupported-key-member`).
 
 #[cfg(test)]
 #[path = "error_tests.rs"]
@@ -101,6 +104,7 @@ const CONFIG_VALUE_MISSING_CODE: &str = "gix::config-value-missing";
 const INSTALL_DIR_UNAVAILABLE_CODE: &str = "gix::install-dir-unavailable";
 const CONFIG_NAME_CLASH_CODE: &str = "gix::config-name-clash";
 const CONFIG_SECTION_MALFORMED_CODE: &str = "gix::config-section-malformed";
+const UNSUPPORTED_KEY_MEMBER_CODE: &str = "gix::config-unsupported-key-member";
 
 /// Start of the help line that lists a command's error codes.
 const CODES_LINE_PREFIX: &str = "Error codes: ";
@@ -128,6 +132,7 @@ pub(super) const CONFIG_GET_EXTRA_CODES: &[&str] = &[
     CONFIG_PATH_NOT_UTF8_CODE,
     INSTALL_DIR_UNAVAILABLE_CODE,
     CONFIG_KEY_RESET_CODE,
+    UNSUPPORTED_KEY_MEMBER_CODE,
 ];
 
 /// Every stable code an error of this plugin can carry.
@@ -174,6 +179,7 @@ const ALL_CODES: &[&str] = &[
     INSTALL_DIR_UNAVAILABLE_CODE,
     CONFIG_NAME_CLASH_CODE,
     CONFIG_SECTION_MALFORMED_CODE,
+    UNSUPPORTED_KEY_MEMBER_CODE,
 ];
 
 const INVALID_SIDE_LABEL: &str = "invalid side";
@@ -205,6 +211,8 @@ const CONFIG_VALUE_MISSING_LABEL: &str = "this key has no value, so it cannot be
 const INSTALL_DIR_UNAVAILABLE_LABEL: &str =
     "this path uses %(prefix)/, which needs the install directory of git";
 const CONFIG_NAME_CLASH_LABEL: &str = "this section has a variable and a subsection with this name";
+const UNSUPPORTED_KEY_MEMBER_LABEL: &str =
+    "this part is a number or has a ? / ! modifier; quote it to use it as text";
 
 /// Label for a repository that was found but cannot be opened.
 const UNOPENABLE_LABEL: &str =
@@ -441,6 +449,15 @@ pub enum CommandError {
         /// Span of the `--type` value.
         span: Span,
     },
+
+    /// A cell path member of a `gix config get` key is not plain text.
+    #[error(
+        "a key part must be plain text: number, `?` and `!` parts are not supported; quote it, for example remote.\"0\".url"
+    )]
+    UnsupportedKeyMember {
+        /// Span of the member (a number, or a `?`/`!` modifier).
+        span: Span,
+    },
 }
 
 impl CommandError {
@@ -552,6 +569,7 @@ impl CommandError {
                 given: _given,
                 span: _span,
             } => self.source(),
+            Self::UnsupportedKeyMember { span: _span } => self.source(),
             Self::EmptyRevision { span: _span }
             | Self::MissingExpect { span: _span }
             | Self::InvalidSideRecord { span: _span } => self.source(),
@@ -688,6 +706,7 @@ impl CommandError {
                 given: _given,
                 span: _span,
             } => UNKNOWN_CONFIG_TYPE_CODE,
+            Self::UnsupportedKeyMember { span: _span } => UNSUPPORTED_KEY_MEMBER_CODE,
         }
     }
 
@@ -716,7 +735,8 @@ impl CommandError {
             Self::WrongInput(input) => Some(input.span),
             Self::EmptyRevision { span }
             | Self::MissingExpect { span }
-            | Self::InvalidSideRecord { span } => Some(*span),
+            | Self::InvalidSideRecord { span }
+            | Self::UnsupportedKeyMember { span } => Some(*span),
             Self::InvalidSideType { span, got: _got } => Some(*span),
             Self::InvalidObjectId {
                 span,
@@ -971,6 +991,7 @@ impl CommandError {
                 given: _given,
                 span: _span,
             } => Some(UNKNOWN_CONFIG_TYPE_LABEL),
+            Self::UnsupportedKeyMember { span: _span } => Some(UNSUPPORTED_KEY_MEMBER_LABEL),
             Self::WrongInput(_) | Self::Git(_) => None,
         }
     }
@@ -1017,6 +1038,7 @@ impl CommandError {
                 given: _given,
                 span: _span,
             } => None,
+            Self::UnsupportedKeyMember { span: _span } => None,
             Self::HandleRepositoryGone {
                 git_dir: _git_dir,
                 span: _span,

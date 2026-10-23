@@ -15,6 +15,8 @@ use crate::commands::{
 
 use nu_plugin::{EngineInterface, EvaluatedCall, SimplePluginCommand};
 use nu_plugin_gix_core::{self as git, ConfigType, Registry};
+use nu_protocol::ast::PathMember;
+use nu_protocol::casing::Casing;
 use nu_protocol::{
     Category, Example, LabeledError, Signature, Span, Spanned, SyntaxShape, Type, Value, record,
 };
@@ -228,8 +230,8 @@ impl SimplePluginCommand for ConfigGet {
         Signature::build(GET_COMMAND)
             .required(
                 KEY_ARG,
-                SyntaxShape::String,
-                "configuration key, e.g. `user.name`, `remote.origin` or `core`",
+                SyntaxShape::CellPath,
+                "configuration key as a cell path: `user.name`, `remote.origin`, `core`; quote a part that contains a dot: `remote.\"a.b\".url`",
             )
             .named(
                 TYPE_FLAG,
@@ -328,15 +330,60 @@ impl SimplePluginCommand for ConfigList {
 enum Request {
     /// One key, read as the type `--type` names.
     Typed(git::ConfigKey, ConfigType),
-    /// A section, such as `core`, read as a record.
-    Section(git::SectionName),
-    /// A dotted key without `--type`: the variable it names when one is set, otherwise the subsection it names.
-    Subsection {
-        /// The key the argument parses to, read as a variable first.
-        key: git::ConfigKey,
-        /// The subsection the argument names after its first dot.
-        subsection: git::Subsection,
-    },
+    /// A key without `--type`: a section, a subsection, a dotted key or a variable.
+    Lookup(git::LookupPath),
+}
+
+/// The key argument as `get` receives it: git key text, or the members of a cell path.
+enum KeyInput {
+    /// Git key text, split by git's rule: a string value, or a cell path of one member (so `"user.name"` works).
+    Text(String),
+    /// The members of a cell path of two or more members, structural: never split or joined.
+    Members(Vec<String>),
+}
+
+/// Reads the key argument value as [`KeyInput`]: a string, or a one-member cell path, is git key text; the
+/// members of a longer cell path are structural.
+///
+/// # Errors
+///
+/// Returns [`CommandError::UnsupportedKeyMember`], at the member, for a member that is a number, optional (`?`)
+/// or case-insensitive (`!`), and [`CommandError::InvalidArgument`] for a value that is neither a string nor a
+/// cell path.
+fn key_input(key: &Spanned<Value>) -> Result<KeyInput, CommandError> {
+    if let Ok(text) = key.item.as_str() {
+        return Ok(KeyInput::Text(text.to_owned()));
+    }
+
+    match key.item.as_cell_path() {
+        Ok(path) => match path.members.as_slice() {
+            [member] => plain_member(member).map(KeyInput::Text),
+            members => members
+                .iter()
+                .map(plain_member)
+                .collect::<Result<Vec<String>, CommandError>>()
+                .map(KeyInput::Members),
+        },
+        Err(source) => Err(CommandError::InvalidArgument {
+            source: Box::new(source),
+            span: key.span,
+        }),
+    }
+}
+
+/// The text of a plain string member: not optional and case-sensitive.
+fn plain_member(member: &PathMember) -> Result<String, CommandError> {
+    match member {
+        PathMember::String {
+            val,
+            span: _span,
+            optional: false,
+            casing: Casing::Sensitive,
+        } => Ok(val.clone()),
+        _ => Err(CommandError::UnsupportedKeyMember {
+            span: member.span(),
+        }),
+    }
 }
 
 /// Reads the pipeline input, then lists the configuration of the repository it names.
@@ -384,12 +431,12 @@ fn get_call(
     call: &EvaluatedCall,
     input: &Value,
 ) -> Result<Value, CommandError> {
-    let key = positional_arg::<String>(call, KEY_POSITION)?;
+    let key = positional_arg::<Value>(call, KEY_POSITION)?;
     let ty = config_type(call)?;
     let request = parse_request(&key, ty)?;
     let repo = handle_from::<Repository>(input)?;
 
-    run_get(registry, repo, &key, request, call.head, input.span())
+    run_get(registry, repo, key.span, request, call.head, input.span())
 }
 
 /// Reads the `--type` flag: `None` when it is absent, otherwise the type it names.
@@ -414,37 +461,35 @@ fn config_type(call: &EvaluatedCall) -> Result<Option<ConfigType>, CommandError>
 }
 
 /// Parses the key argument once into what to read: a key with `--type` (a key without a dot is invalid), otherwise
-/// a section, or a subsection whose dotted text is also a key.
+/// a section, or a dotted path that names both a variable and a subsection. Key text follows git's rule; the
+/// members of a cell path of several members are taken as they are.
 ///
 /// # Errors
 ///
-/// Returns [`git::GixError::InvalidConfigKey`], at the key span, for a key that does not parse.
-fn parse_request(key: &Spanned<String>, ty: Option<ConfigType>) -> Result<Request, CommandError> {
-    match ty {
-        Some(ty) => Ok(Request::Typed(parse_key(key)?, ty)),
-        None => match git::GroupPath::parse(&key.item).map_err(|source| CommandError::Located {
-            span: key.span,
-            source,
-        })? {
-            git::GroupPath::Section(section) => Ok(Request::Section(section)),
-            git::GroupPath::Subsection(_, subsection) => Ok(Request::Subsection {
-                key: parse_key(key)?,
-                subsection,
-            }),
-        },
-    }
-}
-
-/// Parses the key argument as a `section.name` or `section.subsection.name` key.
-///
-/// # Errors
-///
-/// Returns [`git::GixError::InvalidConfigKey`], at the key span, for a key that does not parse.
-fn parse_key(key: &Spanned<String>) -> Result<git::ConfigKey, CommandError> {
-    git::ConfigKey::parse(&key.item).map_err(|source| CommandError::Located {
+/// Returns [`git::GixError::InvalidConfigKey`], at the key span, for a key that does not parse, and the errors
+/// of [`key_input`].
+fn parse_request(key: &Spanned<Value>, ty: Option<ConfigType>) -> Result<Request, CommandError> {
+    let located = |source| CommandError::Located {
         span: key.span,
         source,
-    })
+    };
+
+    match (ty, key_input(key)?) {
+        (Some(ty), KeyInput::Text(text)) => Ok(Request::Typed(
+            git::ConfigKey::parse(&text).map_err(located)?,
+            ty,
+        )),
+        (Some(ty), KeyInput::Members(members)) => Ok(Request::Typed(
+            git::ConfigKey::from_members(&members).map_err(located)?,
+            ty,
+        )),
+        (None, KeyInput::Text(text)) => Ok(Request::Lookup(
+            git::LookupPath::parse(&text).map_err(located)?,
+        )),
+        (None, KeyInput::Members(members)) => Ok(Request::Lookup(
+            git::LookupPath::from_members(&members).map_err(located)?,
+        )),
+    }
 }
 
 /// Reads what `request` names from the configuration of `repository`. Null when unset.
@@ -456,7 +501,7 @@ fn parse_key(key: &Spanned<String>) -> Result<git::ConfigKey, CommandError> {
 fn run_get(
     registry: &Registry,
     repository: &Repository,
-    key: &Spanned<String>,
+    key_span: Span,
     request: Request,
     span: Span,
     handle_span: Span,
@@ -464,7 +509,7 @@ fn run_get(
     let opened = acquire_handle(registry, repository, handle_span)?;
 
     let config = git::Config::read(&opened).map_err(|source| CommandError::Located {
-        span: key.span,
+        span: key_span,
         source,
     })?;
 
@@ -476,25 +521,38 @@ fn run_get(
             &git::PathContext::of(&opened),
             span,
         ),
-        Request::Section(section) => {
+        Request::Lookup(git::LookupPath::Group(git::GroupPath::Section(section))) => {
             config_read::read_section(&config, &section, span).map(|group| group_value(group, span))
         }
-        Request::Subsection {
-            key: config_key,
+        Request::Lookup(git::LookupPath::Group(git::GroupPath::Subsection(
+            section,
             subsection,
-        } => config_read::read_variable(&config, &config_key, span).and_then(|found| {
-            found.map_or_else(
-                || {
-                    config_read::read_subsection(&config, config_key.section(), &subsection, span)
-                        .map(|group| group_value(group, span))
-                },
-                Ok,
-            )
-        }),
+        ))) => config_read::read_subsection(&config, &section, &subsection, span)
+            .map(|read| group_value(read, span)),
+        Request::Lookup(git::LookupPath::Dotted(path)) => {
+            config_read::read_variable(&config, &path, span).and_then(|found| {
+                found.map_or_else(
+                    || {
+                        config_read::read_subsection(
+                            &config,
+                            path.section(),
+                            &path.name_as_subsection(),
+                            span,
+                        )
+                        .map(|read| group_value(read, span))
+                    },
+                    Ok,
+                )
+            })
+        }
+        Request::Lookup(git::LookupPath::Variable(path)) => {
+            config_read::read_variable(&config, &path, span)
+                .map(|found| found.unwrap_or_else(|| Value::nothing(span)))
+        }
     };
 
     value.map_err(|source| CommandError::Located {
-        span: key.span,
+        span: key_span,
         source,
     })
 }

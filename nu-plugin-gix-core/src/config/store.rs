@@ -59,11 +59,12 @@ impl Config {
             let header = section.header();
             let section_name = SectionName::from_name(header.name());
 
+            // git lowercases a legacy header's subsection; every lookup is then exact.
             let subsection = header.subsection_name().map(|bytes| {
                 if header.is_legacy() {
-                    Subsection::legacy(bytes)
+                    Subsection::from(bytes.to_ascii_lowercase())
                 } else {
-                    Subsection::new(bytes)
+                    Subsection::from(bytes)
                 }
             });
 
@@ -92,11 +93,7 @@ impl Config {
                     fault,
                 })?;
 
-                let key = ConfigKey {
-                    section: section_name.clone(),
-                    subsection: subsection.clone(),
-                    name,
-                };
+                let key = ConfigKey::new(section_name.clone(), subsection.clone(), name);
 
                 let occurrence = Occurrence {
                     value,
@@ -370,7 +367,7 @@ mod tests {
         fn rejects_name_without_value(#[case] events: Vec<EventRef<'static>>) {
             assert_matches!(
                 values_of(events),
-                Err(SectionFault::NameWithoutValue(name)) if name == VariableName::new("a"),
+                Err(SectionFault::NameWithoutValue(name)) if name == VariableName::from("a"),
             );
         }
 
@@ -403,7 +400,7 @@ mod tests {
 
             assert_matches!(
                 values_of(events).as_deref(),
-                Ok([(name, RawValue::Valueless)]) if *name == VariableName::new("b"),
+                Ok([(name, RawValue::Valueless)]) if *name == VariableName::from("b"),
             );
         }
 
@@ -418,7 +415,7 @@ mod tests {
 
             assert_matches!(
                 values.next(),
-                Some(Err(SectionFault::NameWithoutValue(name))) if name == VariableName::new("a"),
+                Some(Err(SectionFault::NameWithoutValue(name))) if name == VariableName::from("a"),
             );
             assert_matches!(values.next(), None);
         }
@@ -442,7 +439,7 @@ mod tests {
                 names.push(name);
             }
 
-            assert_eq!(names, vec![VariableName::new("a")]);
+            assert_eq!(names, vec![VariableName::from("a")]);
             assert_matches!(values.next(), None);
             assert_matches!(values.next(), None);
         }
@@ -457,11 +454,11 @@ mod tests {
 
             assert_matches!(
                 values.next(),
-                Some(Ok((name, RawValue::Valueless))) if name == VariableName::new("a"),
+                Some(Ok((name, RawValue::Valueless))) if name == VariableName::from("a"),
             );
             assert_matches!(
                 values.next(),
-                Some(Err(SectionFault::NameWithoutValue(name))) if name == VariableName::new("b"),
+                Some(Err(SectionFault::NameWithoutValue(name))) if name == VariableName::from("b"),
             );
             assert_matches!(values.next(), None);
         }
@@ -601,15 +598,12 @@ mod tests {
                 let remote_keys: Vec<&ConfigKey> = config
                     .iter()
                     .map(|(key, _)| key)
-                    .filter(|key| key.section == SectionName::new("remote"))
+                    .filter(|key| *key.section() == SectionName::from("remote"))
                     .collect();
                 let [key] = remote_keys.as_slice() else {
                     return Err(TestError::Failure(format!("got {remote_keys:?}")));
                 };
-                assert_matches!(
-                    key.subsection.as_ref().map(Subsection::to_text),
-                    Some(Err(_)),
-                );
+                assert_matches!(key.subsection().map(Subsection::to_text), Some(Err(_)),);
                 Ok(())
             }
         }

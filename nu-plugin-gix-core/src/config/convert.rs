@@ -279,11 +279,7 @@ mod tests {
     const NON_UTF8_TEMP_DIR: &str = "the temporary directory is not valid UTF-8";
 
     fn key() -> ConfigKey {
-        ConfigKey {
-            section: SectionName::new("gixtest"),
-            subsection: None,
-            name: VariableName::new("k"),
-        }
+        ConfigKey::new(SectionName::from("gixtest"), None, VariableName::from("k"))
     }
 
     fn occurrence(value: RawValue) -> Occurrence {

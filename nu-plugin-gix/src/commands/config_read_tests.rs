@@ -334,8 +334,8 @@ mod nest {
         assert_matches!(
             result,
             Err(git::GixError::ConfigNameClash { section, name, variable_origin, subsection_origin })
-                if section == git::SectionName::new(SECTION)
-                    && name == git::VariableName::new(SHARED)
+                if section == git::SectionName::from(SECTION)
+                    && name == git::VariableName::from(SHARED)
                     && variable_origin.path == Some(PathBuf::from(FIRST_FILE))
                     && subsection_origin.path == Some(PathBuf::from(SECOND_FILE))
         );
@@ -361,8 +361,8 @@ mod nest {
         assert_matches!(
             result,
             Err(git::GixError::ConfigNameClash { section, name, variable_origin, subsection_origin })
-                if section == git::SectionName::new(SECTION)
-                    && name == git::VariableName::new(SHARED)
+                if section == git::SectionName::from(SECTION)
+                    && name == git::VariableName::from(SHARED)
                     && variable_origin.path == Some(PathBuf::from(SECOND_FILE))
                     && subsection_origin.path == Some(PathBuf::from(FIRST_FILE))
         );
@@ -771,7 +771,7 @@ mod read_section {
             )?,
         ]);
 
-        let group = read_section(&config, &git::SectionName::new(SECTION), SPAN)?;
+        let group = read_section(&config, &git::SectionName::from(SECTION), SPAN)?;
         let record = record_of(group)?;
 
         assert_eq!(
@@ -799,7 +799,7 @@ mod read_section {
             )?,
         ]);
 
-        let group = read_section(&config, &git::SectionName::new(CREDENTIAL), SPAN)?;
+        let group = read_section(&config, &git::SectionName::from(CREDENTIAL), SPAN)?;
 
         assert_eq!(
             record_of(group)?,
@@ -816,7 +816,7 @@ mod read_section {
             occurrence(text(""), &origin_at(FIRST_FILE)),
         )?]);
 
-        let group = read_section(&config, &git::SectionName::new(CREDENTIAL), SPAN)?;
+        let group = read_section(&config, &git::SectionName::from(CREDENTIAL), SPAN)?;
 
         assert_matches!(group, Group::AllReset);
 
@@ -827,7 +827,7 @@ mod read_section {
     fn unknown_section_is_missing() -> TestResult {
         let config = git::Config::default();
 
-        let group = read_section(&config, &git::SectionName::new(SECTION_ABSENT), SPAN)?;
+        let group = read_section(&config, &git::SectionName::from(SECTION_ABSENT), SPAN)?;
 
         assert_matches!(group, Group::Missing);
 
@@ -847,13 +847,13 @@ mod read_section {
             )?,
         ]);
 
-        let result = read_section(&config, &git::SectionName::new(SECTION), SPAN);
+        let result = read_section(&config, &git::SectionName::from(SECTION), SPAN);
 
         assert_matches!(
             result,
             Err(git::GixError::ConfigNameClash { section, name, variable_origin, subsection_origin })
-                if section == git::SectionName::new(SECTION)
-                    && name == git::VariableName::new(SHARED)
+                if section == git::SectionName::from(SECTION)
+                    && name == git::VariableName::from(SHARED)
                     && variable_origin.path == Some(PathBuf::from(FIRST_FILE))
                     && subsection_origin.path == Some(PathBuf::from(SECOND_FILE))
         );
@@ -871,7 +871,7 @@ mod read_section {
             )?,
         ]);
 
-        let group = read_section(&config, &git::SectionName::new(CREDENTIAL), SPAN)?;
+        let group = read_section(&config, &git::SectionName::from(CREDENTIAL), SPAN)?;
 
         assert_eq!(
             record_of(group)?,
@@ -896,7 +896,7 @@ mod read_section {
             )?,
         ]);
 
-        let group = read_section(&config, &git::SectionName::new(SECTION), SPAN)?;
+        let group = read_section(&config, &git::SectionName::from(SECTION), SPAN)?;
 
         assert_eq!(
             record_of(group)?,
@@ -912,15 +912,15 @@ mod read_section {
     #[rstest]
     fn non_utf8_subsection_of_the_section_is_an_error() {
         let config = git::Config::from_occurrences([(
-            git::ConfigKey {
-                section: git::SectionName::new(REMOTE),
-                subsection: Some(git::Subsection::new(NON_UTF8_BYTES)),
-                name: git::VariableName::new(URL),
-            },
+            git::ConfigKey::new(
+                git::SectionName::from(REMOTE),
+                Some(git::Subsection::from(NON_UTF8_BYTES)),
+                git::VariableName::from(URL),
+            ),
             occurrence(text(URL_VALUE), &origin_at(FIRST_FILE)),
         )]);
 
-        let result = read_section(&config, &git::SectionName::new(REMOTE), SPAN);
+        let result = read_section(&config, &git::SectionName::from(REMOTE), SPAN);
 
         assert_matches!(result, Err(git::GixError::ConfigSubsectionNotUtf8 { .. }));
     }
@@ -933,16 +933,16 @@ mod read_section {
                 occurrence(text(ADA), &origin_at(FIRST_FILE)),
             )?,
             (
-                git::ConfigKey {
-                    section: git::SectionName::new(REMOTE),
-                    subsection: Some(git::Subsection::new(NON_UTF8_BYTES)),
-                    name: git::VariableName::new(URL),
-                },
+                git::ConfigKey::new(
+                    git::SectionName::from(REMOTE),
+                    Some(git::Subsection::from(NON_UTF8_BYTES)),
+                    git::VariableName::from(URL),
+                ),
                 occurrence(text(URL_VALUE), &origin_at(SECOND_FILE)),
             ),
         ]);
 
-        let group = read_section(&config, &git::SectionName::new(USER), SPAN)?;
+        let group = read_section(&config, &git::SectionName::from(USER), SPAN)?;
 
         assert_eq!(
             record_of(group)?,
@@ -969,7 +969,7 @@ mod read_section {
             )?,
         ]);
 
-        let result = read_section(&config, &git::SectionName::new(REMOTE), SPAN);
+        let result = read_section(&config, &git::SectionName::from(REMOTE), SPAN);
 
         assert_matches!(
             result,
@@ -997,7 +997,7 @@ mod read_section {
             )?,
         ]);
 
-        let result = read_section(&config, &git::SectionName::new(INCLUDE), SPAN);
+        let result = read_section(&config, &git::SectionName::from(INCLUDE), SPAN);
 
         assert_matches!(
             result,
@@ -1027,8 +1027,8 @@ mod read_subsection {
 
         let group = read_subsection(
             &config,
-            &git::SectionName::new(SECTION),
-            &git::Subsection::new(SHARED),
+            &git::SectionName::from(SECTION),
+            &git::Subsection::from(SHARED),
             SPAN,
         )?;
 
@@ -1046,8 +1046,8 @@ mod read_subsection {
 
         let group = read_subsection(
             &config,
-            &git::SectionName::new(REMOTE),
-            &git::Subsection::new(ORIGIN),
+            &git::SectionName::from(REMOTE),
+            &git::Subsection::from(ORIGIN),
             SPAN,
         )?;
 
@@ -1151,11 +1151,11 @@ mod read_all {
                 occurrence(text(ADA), &origin_at(FIRST_FILE)),
             )?,
             (
-                git::ConfigKey {
-                    section: git::SectionName::new(REMOTE),
-                    subsection: Some(git::Subsection::new(NON_UTF8_BYTES)),
-                    name: git::VariableName::new(URL),
-                },
+                git::ConfigKey::new(
+                    git::SectionName::from(REMOTE),
+                    Some(git::Subsection::from(NON_UTF8_BYTES)),
+                    git::VariableName::from(URL),
+                ),
                 occurrence(text(URL_VALUE), &origin_at(SECOND_FILE)),
             ),
         ]);

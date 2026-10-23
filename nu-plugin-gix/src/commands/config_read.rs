@@ -1,6 +1,10 @@
 //! Reads the configuration of a repository as Nushell values: the occurrences a key resolves to, their typed or untyped
 //! values, and the records of sections and subsections.
 
+#[cfg(test)]
+#[path = "config_read_tests.rs"]
+mod tests;
+
 use super::config_known::{self, KnownKey, Multi, ValueKind};
 
 use nu_plugin_gix_core as git;
@@ -136,7 +140,7 @@ impl Nest {
     ) -> Result<(), git::GixError> {
         match member(key, occurrences, span)? {
             None => Ok(()),
-            Some(found) => match &key.subsection {
+            Some(found) => match &key.subsection() {
                 None => self.insert_variable(key, found),
                 Some(subsection) => {
                     let text = subsection.to_text().map_err(|source| {
@@ -161,20 +165,20 @@ impl Nest {
         found: Found<'_>,
     ) -> Result<(), git::GixError> {
         let column = Column::Variable {
-            name: key.name.clone(),
+            name: key.name().clone(),
             value: found.value,
             origin: Arc::clone(&found.from.origin),
         };
 
-        match self.columns.entry(key.name.as_str().to_owned()) {
+        match self.columns.entry(key.name().as_str().to_owned()) {
             Entry::Vacant(slot) => {
                 slot.insert(column);
             }
             Entry::Occupied(mut taken) => {
                 if let Column::Subsection(subsection) = taken.get() {
                     return Err(name_clash(
-                        &key.section,
-                        &key.name,
+                        key.section(),
+                        key.name(),
                         Arc::clone(&found.from.origin),
                         Arc::clone(&subsection.origin),
                     ));
@@ -198,7 +202,7 @@ impl Nest {
         match self.columns.entry(subsection.to_owned()) {
             Entry::Vacant(slot) => {
                 let mut members = Members::default();
-                members.insert(key.name.as_str().to_owned(), found.value);
+                members.insert(key.name().as_str().to_owned(), found.value);
                 slot.insert(Column::Subsection(Subsection {
                     members,
                     origin: Arc::clone(&found.from.origin),
@@ -212,7 +216,7 @@ impl Nest {
                     origin,
                     value: _value,
                 } => Err(name_clash(
-                    &key.section,
+                    key.section(),
                     name,
                     Arc::clone(origin),
                     Arc::clone(&found.from.origin),
@@ -220,7 +224,7 @@ impl Nest {
                 Column::Subsection(existing) => {
                     existing
                         .members
-                        .insert(key.name.as_str().to_owned(), found.value);
+                        .insert(key.name().as_str().to_owned(), found.value);
 
                     Ok(())
                 }
@@ -369,7 +373,7 @@ pub fn read_section(
     let mut nest = Nest::default();
     let mut seen = false;
 
-    for (key, occurrences) in config.iter().filter(|(key, _)| key.section == *section) {
+    for (key, occurrences) in config.iter().filter(|(key, _)| key.section() == section) {
         seen = true;
         nest.insert_key(key, occurrences, span)?;
     }
@@ -394,12 +398,12 @@ pub fn read_subsection(
 
     for (key, occurrences) in config
         .iter()
-        .filter(|(key, _)| key.section == *section && key.subsection.as_ref() == Some(subsection))
+        .filter(|(key, _)| key.section() == section && key.subsection() == Some(subsection))
     {
         seen = true;
 
         if let Some(found) = member(key, occurrences, span)? {
-            members.insert(key.name.as_str().to_owned(), found.value);
+            members.insert(key.name().as_str().to_owned(), found.value);
         }
     }
 
@@ -417,7 +421,7 @@ pub fn read_all(config: &git::Config, span: Span) -> Result<Value, git::GixError
 
     for (key, occurrences) in config.iter() {
         sections
-            .entry(key.section.as_str())
+            .entry(key.section().as_str())
             .or_default()
             .insert_key(key, occurrences, span)?;
     }
@@ -595,7 +599,3 @@ fn name_clash(
         subsection_origin,
     }
 }
-
-#[cfg(test)]
-#[path = "config_read_tests.rs"]
-mod tests;

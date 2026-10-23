@@ -91,6 +91,15 @@ const INVALID_VALUE_CODE: &str = "gix::invalid-config-value";
 const TILDE_SECTION: &[u8] = b"[gixtest]\n\thome = ~/gixtest-probe\n";
 const TILDE_KEY: &str = "gixtest.home";
 const TILDE_SUFFIX: &str = "gixtest-probe";
+const SUBSECTION_DOT_SECTION: &[u8] = b"[remote \"a.b\"]\n\turl = dotted\n";
+const SUBSECTION_DOT_GROUP: &str = "remote.\"a.b\"";
+const SUBSECTION_DOT_VALUE: &str = "dotted";
+const URL_VARIABLE: &str = "url";
+const STRING_VARIABLE_SCRIPT: &str = "let h = $in; let k = \"user.name\"; $h | gix config get $k";
+const QUOTED_WHOLE_SCRIPT: &str = "gix config get \"user.name\"";
+const NUMERIC_MEMBER_KEY: &str = "remote.0";
+const OPTIONAL_MEMBER_KEY: &str = "remote.a?";
+const UNSUPPORTED_MEMBER_CODE: &str = "gix::config-unsupported-key-member";
 
 /// The strings of a list value, in order.
 fn string_list(value: &Value) -> Result<Vec<&str>, TestError> {
@@ -694,6 +703,91 @@ mod eval {
             assert!(expanded.ends_with(TILDE_SUFFIX), "got {value:?}");
 
             Ok(())
+        }
+
+        mod cell_path {
+            use super::*;
+
+            #[rstest]
+            fn reads_two_members_with_a_dotted_second_as_a_group(
+                plugin_test: Result<PluginTest, FixtureError>,
+                test_repo: Result<TestRepo, FixtureError>,
+            ) -> Result<(), TestError> {
+                let mut plugin = plugin_test?;
+                let repo = test_repo?;
+
+                append_config(repo.path(), SUBSECTION_DOT_SECTION)?;
+
+                let value = eval_value(
+                    &mut plugin,
+                    &get_script(SUBSECTION_DOT_GROUP),
+                    repo_input(repo.path())?,
+                )?;
+
+                assert_eq!(
+                    string_list(record_column(&value, URL_VARIABLE)?)?,
+                    [SUBSECTION_DOT_VALUE]
+                );
+
+                Ok(())
+            }
+
+            #[rstest]
+            fn reads_a_key_from_a_string_variable(
+                plugin_test: Result<PluginTest, FixtureError>,
+                test_repo: Result<TestRepo, FixtureError>,
+            ) -> Result<(), TestError> {
+                let mut plugin = plugin_test?;
+                let repo = test_repo?;
+
+                append_config(repo.path(), USER_SECTION)?;
+
+                let value = eval_value(
+                    &mut plugin,
+                    STRING_VARIABLE_SCRIPT,
+                    repo_input(repo.path())?,
+                )?;
+
+                assert_eq!(value.as_str()?, USER_NAME);
+
+                Ok(())
+            }
+
+            #[rstest]
+            fn reads_a_quoted_whole_key_as_git_text(
+                plugin_test: Result<PluginTest, FixtureError>,
+                test_repo: Result<TestRepo, FixtureError>,
+            ) -> Result<(), TestError> {
+                let mut plugin = plugin_test?;
+                let repo = test_repo?;
+
+                append_config(repo.path(), USER_SECTION)?;
+
+                let value = eval_value(&mut plugin, QUOTED_WHOLE_SCRIPT, repo_input(repo.path())?)?;
+
+                assert_eq!(value.as_str()?, USER_NAME);
+
+                Ok(())
+            }
+
+            #[rstest]
+            #[case::numeric(NUMERIC_MEMBER_KEY)]
+            #[case::optional(OPTIONAL_MEMBER_KEY)]
+            fn rejects_a_non_string_member_with_its_code_and_label(
+                plugin_test: Result<PluginTest, FixtureError>,
+                test_repo: Result<TestRepo, FixtureError>,
+                #[case] key: &str,
+            ) -> Result<(), TestError> {
+                let mut plugin = plugin_test?;
+                let repo = test_repo?;
+                let script = get_script(key);
+                let labeled = eval_labeled_error(&mut plugin, &script, repo_input(repo.path())?)?;
+
+                assert_eq!(labeled.code.as_deref(), Some(UNSUPPORTED_MEMBER_CODE));
+                assert_label_in_script!(&labeled, &script);
+
+                Ok(())
+            }
         }
     }
 
