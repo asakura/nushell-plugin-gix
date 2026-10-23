@@ -2,10 +2,13 @@
 
 use super::*;
 
+use crate::commands::config_key::key_for_test;
 use crate::commands::config_known::SubsectionRule;
 
-use nu_plugin_gix_testing_support::{FixtureError, TestRepo, test_repo};
-use nu_protocol::record;
+use nu_plugin_gix_testing_support::{
+    AssertionError, FixtureError, TestRepo, record_column, test_repo,
+};
+use nu_protocol::{ShellError, record};
 use rstest::{fixture, rstest};
 
 use gix::config::Source;
@@ -15,13 +18,43 @@ use std::{assert_matches, iter};
 #[derive(thiserror::Error, Debug)]
 enum TestError {
     #[error(transparent)]
-    Gix(#[from] git::GixError),
+    Gix(Box<git::GixError>),
 
     #[error(transparent)]
-    Fixture(#[from] FixtureError),
+    Fixture(Box<FixtureError>),
+
+    #[error(transparent)]
+    Assertion(Box<AssertionError>),
+
+    #[error(transparent)]
+    Shell(Box<ShellError>),
 
     #[error("Test failure: {0}")]
     Failure(String),
+}
+
+impl From<git::GixError> for TestError {
+    fn from(error: git::GixError) -> Self {
+        Self::Gix(Box::new(error))
+    }
+}
+
+impl From<FixtureError> for TestError {
+    fn from(error: FixtureError) -> Self {
+        Self::Fixture(Box::new(error))
+    }
+}
+
+impl From<AssertionError> for TestError {
+    fn from(error: AssertionError) -> Self {
+        Self::Assertion(Box::new(error))
+    }
+}
+
+impl From<ShellError> for TestError {
+    fn from(error: ShellError) -> Self {
+        Self::Shell(Box::new(error))
+    }
 }
 
 impl From<git::GixError> for Box<TestError> {
@@ -32,6 +65,18 @@ impl From<git::GixError> for Box<TestError> {
 
 impl From<FixtureError> for Box<TestError> {
     fn from(error: FixtureError) -> Self {
+        Self::from(TestError::from(error))
+    }
+}
+
+impl From<AssertionError> for Box<TestError> {
+    fn from(error: AssertionError) -> Self {
+        Self::from(TestError::from(error))
+    }
+}
+
+impl From<ShellError> for Box<TestError> {
+    fn from(error: ShellError) -> Self {
         Self::from(TestError::from(error))
     }
 }
@@ -57,15 +102,9 @@ const NAME_KEY: &str = "user.name";
 const INCLUDE_KEY: &str = "include.path";
 const HELPER_KEY: &str = "credential.helper";
 const HELPER: &str = "helper";
-const OTHER: &str = "other";
 const OTHER_VALUE: &str = "x";
 const LIST_SECTION: &str = "gixtest";
 const LIST_NAME: &str = "list";
-const SECTION: &str = "gixtest";
-const ZETA_MEMBER: &str = "zeta.member";
-const ALPHA: &str = "alpha";
-const MID_MEMBER: &str = "mid.member";
-const SECTION_ABSENT: &str = "gixabsent";
 const CREDENTIAL: &str = "credential";
 const USER: &str = "user";
 const ADA: &str = "Ada";
@@ -73,18 +112,8 @@ const REMOTE: &str = "remote";
 const ORIGIN: &str = "origin";
 const URL: &str = "url";
 const URL_VALUE: &str = "x";
-const ZETA: &str = "zeta";
-const BETA: &str = "beta";
-const SUB: &str = "sub";
-const GAMMA: &str = "gamma";
 const ONE: &str = "1";
 const TWO: &str = "2";
-const THREE: &str = "3";
-const SHARED: &str = "shared";
-const MEMBER: &str = "member";
-const UPPER_SHARED: &str = "Shared";
-const INCLUDE: &str = "include";
-const PATH: &str = "path";
 const EMPTY_LIST: &str = "a list needs at least one occurrence";
 
 fn origin_at(path: &str) -> Arc<git::Origin> {
@@ -114,14 +143,14 @@ fn text(value: &str) -> git::RawValue {
 }
 
 fn keyed(
-    key: &str,
+    text: &str,
     occurrence: git::Occurrence,
-) -> Result<(git::ConfigKey, git::Occurrence), git::GixError> {
-    Ok((git::ConfigKey::parse(key)?, occurrence))
+) -> Result<(git::ConfigKey, git::Occurrence), TestError> {
+    Ok((key_for_test(text)?, occurrence))
 }
 
-fn untyped(key: &str, values: &Values<'_>) -> Result<Value, git::GixError> {
-    untyped_value(&git::ConfigKey::parse(key)?, values, SPAN)
+fn untyped(text: &str, values: &Values<'_>) -> Result<Value, TestError> {
+    Ok(untyped_value(&key_for_test(text)?, values, SPAN)?)
 }
 
 fn list_of(values: Vec<&git::Occurrence>) -> Result<Values<'_>, Box<TestError>> {
@@ -137,15 +166,6 @@ fn row(multi: Multi) -> KnownKey {
         name: LIST_NAME,
         kind: ValueKind::Text,
         multi,
-    }
-}
-
-fn record_of(group: Group) -> Result<Record, Box<TestError>> {
-    match group {
-        Group::Record(record) => Ok(record),
-        other => Err(Box::new(TestError::Failure(format!(
-            "expected a record, found {other:?}"
-        )))),
     }
 }
 
@@ -313,86 +333,6 @@ mod values {
     }
 }
 
-mod nest {
-    use super::*;
-
-    #[rstest]
-    fn variable_then_subsection_clashes() -> TestResult {
-        let mut nest = Nest::default();
-        nest.insert_key(
-            &git::ConfigKey::parse(&format!("{SECTION}.{SHARED}"))?,
-            &[occurrence(text(ONE), &origin_at(FIRST_FILE))],
-            SPAN,
-        )?;
-
-        let result = nest.insert_key(
-            &git::ConfigKey::parse(&format!("{SECTION}.{SHARED}.{MEMBER}"))?,
-            &[occurrence(text(TWO), &origin_at(SECOND_FILE))],
-            SPAN,
-        );
-
-        assert_matches!(
-            result,
-            Err(git::GixError::ConfigNameClash { section, name, variable_origin, subsection_origin })
-                if section == git::SectionName::from(SECTION)
-                    && name == git::VariableName::from(SHARED)
-                    && variable_origin.path == Some(PathBuf::from(FIRST_FILE))
-                    && subsection_origin.path == Some(PathBuf::from(SECOND_FILE))
-        );
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn subsection_then_variable_clashes() -> TestResult {
-        let mut nest = Nest::default();
-        nest.insert_key(
-            &git::ConfigKey::parse(&format!("{SECTION}.{SHARED}.{MEMBER}"))?,
-            &[occurrence(text(TWO), &origin_at(FIRST_FILE))],
-            SPAN,
-        )?;
-
-        let result = nest.insert_key(
-            &git::ConfigKey::parse(&format!("{SECTION}.{SHARED}"))?,
-            &[occurrence(text(ONE), &origin_at(SECOND_FILE))],
-            SPAN,
-        );
-
-        assert_matches!(
-            result,
-            Err(git::GixError::ConfigNameClash { section, name, variable_origin, subsection_origin })
-                if section == git::SectionName::from(SECTION)
-                    && name == git::VariableName::from(SHARED)
-                    && variable_origin.path == Some(PathBuf::from(SECOND_FILE))
-                    && subsection_origin.path == Some(PathBuf::from(FIRST_FILE))
-        );
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn columns_are_alphabetical_whatever_the_insertion_order() -> TestResult {
-        let mut nest = Nest::default();
-
-        for tail in [ZETA_MEMBER, ALPHA, MID_MEMBER] {
-            nest.insert_key(
-                &git::ConfigKey::parse(&format!("{SECTION}.{tail}"))?,
-                &[occurrence(text(ONE), &origin_at(FIRST_FILE))],
-                SPAN,
-            )?;
-        }
-
-        let record = nest.into_record(SPAN);
-
-        assert_eq!(
-            record.columns().map(String::as_str).collect::<Vec<_>>(),
-            vec!["alpha", "mid", "zeta"]
-        );
-
-        Ok(())
-    }
-}
-
 mod untyped_value {
     use super::*;
 
@@ -459,8 +399,12 @@ mod untyped_value {
 
         assert_matches!(
             result,
-            Err(git::GixError::ConfigValueConversion { origin, .. })
-                if origin.path == Some(PathBuf::from(FIRST_FILE))
+            Err(TestError::Gix(error))
+                if matches!(
+                    error.as_ref(),
+                    git::GixError::ConfigValueConversion { origin, .. }
+                        if origin.path == Some(PathBuf::from(FIRST_FILE))
+                )
         );
     }
 
@@ -473,7 +417,11 @@ mod untyped_value {
 
         let result = untyped(NAME_KEY, &Values::Single(&name));
 
-        assert_matches!(result, Err(git::GixError::ConfigValueNotUtf8 { .. }));
+        assert_matches!(
+            result,
+            Err(TestError::Gix(error))
+                if matches!(error.as_ref(), git::GixError::ConfigValueNotUtf8 { .. })
+        );
     }
 
     #[rstest]
@@ -496,8 +444,23 @@ mod untyped_value {
     }
 }
 
-mod read_typed {
+mod typed_setting {
     use super::*;
+
+    fn typed(
+        config: &git::Config,
+        ty: git::ConfigType,
+        paths: &git::PathContext,
+    ) -> Result<Result<Value, git::GixError>, Box<TestError>> {
+        let tree = config.tree();
+        let setting = tree
+            .settings()
+            .into_iter()
+            .next()
+            .ok_or_else(|| TestError::Failure("the config has no setting".to_owned()))?;
+
+        Ok(typed_setting(setting, ty, paths, SPAN))
+    }
 
     #[rstest]
     fn valueless_bool_is_true(
@@ -509,13 +472,11 @@ mod read_typed {
             occurrence(git::RawValue::Valueless, &origin_at(FIRST_FILE)),
         )?]);
 
-        let value = read_typed(
+        let value = typed(
             &config,
-            &git::ConfigKey::parse(BARE_KEY)?,
             git::ConfigType::Scalar(git::ScalarType::Bool),
             &paths,
-            SPAN,
-        )?;
+        )??;
 
         assert_eq!(value, Value::test_bool(true));
 
@@ -537,7 +498,7 @@ mod read_typed {
             occurrence(git::RawValue::Valueless, &origin_at(FIRST_FILE)),
         )?]);
 
-        let result = read_typed(&config, &git::ConfigKey::parse(key)?, ty, &paths, SPAN);
+        let result = typed(&config, ty, &paths)?;
 
         assert_matches!(result, Err(git::GixError::ConfigValueMissing { .. }));
 
@@ -557,13 +518,11 @@ mod read_typed {
             keyed(HELPER_KEY, occurrence(text(""), &origin_at(SECOND_FILE)))?,
         ]);
 
-        let result = read_typed(
+        let result = typed(
             &config,
-            &git::ConfigKey::parse(HELPER_KEY)?,
             git::ConfigType::Scalar(git::ScalarType::String),
             &paths,
-            SPAN,
-        );
+        )?;
 
         assert_matches!(
             result,
@@ -590,13 +549,11 @@ mod read_typed {
             )?,
         ]);
 
-        let value = read_typed(
+        let value = typed(
             &config,
-            &git::ConfigKey::parse(HELPER_KEY)?,
             git::ConfigType::Scalar(git::ScalarType::String),
             &paths,
-            SPAN,
-        )?;
+        )??;
 
         assert_eq!(value, Value::test_string(SECOND_VALUE));
 
@@ -613,13 +570,7 @@ mod read_typed {
             untrusted(text(ABSOLUTE_PATH), &origin_at(FIRST_FILE)),
         )?]);
 
-        let value = read_typed(
-            &config,
-            &git::ConfigKey::parse(INCLUDE_KEY)?,
-            git::ConfigType::Path,
-            &paths,
-            SPAN,
-        )?;
+        let value = typed(&config, git::ConfigType::Path, &paths)??;
 
         assert_eq!(value, Value::nothing(SPAN));
 
@@ -639,13 +590,7 @@ mod read_typed {
             keyed(HELPER_KEY, untrusted(text(""), &origin_at(SECOND_FILE)))?,
         ]);
 
-        let value = read_typed(
-            &config,
-            &git::ConfigKey::parse(HELPER_KEY)?,
-            git::ConfigType::Path,
-            &paths,
-            SPAN,
-        )?;
+        let value = typed(&config, git::ConfigType::Path, &paths)??;
 
         assert_eq!(value, Value::test_string(ABSOLUTE_PATH));
 
@@ -665,35 +610,9 @@ mod read_typed {
             ),
         )?]);
 
-        let result = read_typed(
-            &config,
-            &git::ConfigKey::parse(INCLUDE_KEY)?,
-            git::ConfigType::Path,
-            &paths,
-            SPAN,
-        );
+        let result = typed(&config, git::ConfigType::Path, &paths)?;
 
         assert_matches!(result, Err(git::GixError::ConfigPathNotUtf8 { .. }));
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn unset_key_is_null(
-        path_context: Result<(TestRepo, git::PathContext), Box<TestError>>,
-    ) -> TestResult {
-        let (_repo, paths) = path_context?;
-        let config = git::Config::default();
-
-        let value = read_typed(
-            &config,
-            &git::ConfigKey::parse(BARE_KEY)?,
-            git::ConfigType::Scalar(git::ScalarType::Bool),
-            &paths,
-            SPAN,
-        )?;
-
-        assert_eq!(value, Value::nothing(SPAN));
 
         Ok(())
     }
@@ -708,13 +627,11 @@ mod read_typed {
             untrusted(text(TRUE_TEXT), &origin_at(FIRST_FILE)),
         )?]);
 
-        let value = read_typed(
+        let value = typed(
             &config,
-            &git::ConfigKey::parse(BARE_KEY)?,
             git::ConfigType::Scalar(git::ScalarType::Bool),
             &paths,
-            SPAN,
-        )?;
+        )??;
 
         assert_eq!(value, Value::test_bool(true));
 
@@ -722,68 +639,444 @@ mod read_typed {
     }
 }
 
-mod read_variable {
+mod rows {
     use super::*;
 
-    #[rstest]
-    fn unset_key_is_none() -> TestResult {
-        let config = git::Config::default();
-
-        let value = read_variable(&config, &git::ConfigKey::parse(NAME_KEY)?, SPAN)?;
-
-        assert_eq!(value, None);
-
-        Ok(())
+    const REMOTE_ORIGIN_URL_KEY: &str = "remote.Origin.url";
+    const REMOTE_ORIGIN_URL_ROW: &str = "remote.Origin.url";
+    const BOB: &str = "Bob";
+    const KEY_COLUMN: &str = "key";
+    const VALUE_COLUMN: &str = "value";
+    const SCOPE_COLUMN: &str = "scope";
+    const FILE_COLUMN: &str = "file";
+    const HIDDEN_KEY: &str = "a.x";
+    const HIDDEN_SUBSECTION_KEY: &str = "a.x.y";
+    const UNKNOWN_KEY: &str = "gixtest.unknown";
+    const EMPTY_TEXT: &str = "";
+    const FIVE: &str = "5";
+    const LOCAL_SCOPE: &str = "local";
+    const COMMAND_SCOPE: &str = "command";
+    fn texts(rows: &[Value], name: &str) -> Result<Vec<String>, Box<TestError>> {
+        rows.iter()
+            .map(|row| -> Result<String, Box<TestError>> {
+                Ok(record_column(row, name)?.as_str()?.to_owned())
+            })
+            .collect()
     }
 
     #[rstest]
-    fn reset_is_an_error() -> TestResult {
-        let config = git::Config::from_occurrences([keyed(
-            HELPER_KEY,
-            occurrence(text(""), &origin_at(FIRST_FILE)),
-        )?]);
-
-        let result = read_variable(&config, &git::ConfigKey::parse(HELPER_KEY)?, SPAN);
-
-        assert_matches!(result, Err(git::GixError::ConfigKeyReset { .. }));
-
-        Ok(())
-    }
-}
-
-mod read_section {
-    use super::*;
-
-    #[rstest]
-    fn nested_shape_has_alphabetical_columns() -> TestResult {
+    fn key_form() -> TestResult {
         let config = git::Config::from_occurrences([
             keyed(
-                &format!("{SECTION}.{ZETA}"),
-                occurrence(text(ONE), &origin_at(FIRST_FILE)),
+                BARE_KEY,
+                occurrence(text(TRUE_TEXT), &origin_at(FIRST_FILE)),
             )?,
             keyed(
-                &format!("{SECTION}.{BETA}"),
-                occurrence(text(TWO), &origin_at(FIRST_FILE)),
-            )?,
-            keyed(
-                &format!("{SECTION}.{SUB}.{GAMMA}"),
-                occurrence(text(THREE), &origin_at(FIRST_FILE)),
+                REMOTE_ORIGIN_URL_KEY,
+                occurrence(text(URL_VALUE), &origin_at(FIRST_FILE)),
             )?,
         ]);
 
-        let group = read_section(&config, &git::SectionName::from(SECTION), SPAN)?;
-        let record = record_of(group)?;
+        let rows = rows(&config.tree(), SPAN)?;
+
+        assert_eq!(texts(&rows, KEY_COLUMN)?, [BARE_KEY, REMOTE_ORIGIN_URL_ROW]);
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn sorted_by_key_then_load_order() -> TestResult {
+        let config = git::Config::from_occurrences([
+            keyed(NAME_KEY, occurrence(text(ADA), &origin_at(FIRST_FILE)))?,
+            keyed(NAME_KEY, occurrence(text(BOB), &origin_at(SECOND_FILE)))?,
+            keyed(
+                BARE_KEY,
+                occurrence(text(TRUE_TEXT), &origin_at(FIRST_FILE)),
+            )?,
+        ]);
+
+        let rows = rows(&config.tree(), SPAN)?;
+
+        assert_eq!(texts(&rows, KEY_COLUMN)?, [BARE_KEY, NAME_KEY, NAME_KEY]);
+        assert_eq!(texts(&rows, VALUE_COLUMN)?, [TRUE_TEXT, ADA, BOB]);
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn list_values_are_separate_rows() -> TestResult {
+        let config = git::Config::from_occurrences([
+            keyed(
+                HELPER_KEY,
+                occurrence(text(FIRST_VALUE), &origin_at(FIRST_FILE)),
+            )?,
+            keyed(
+                HELPER_KEY,
+                occurrence(text(SECOND_VALUE), &origin_at(SECOND_FILE)),
+            )?,
+        ]);
+
+        let rows = rows(&config.tree(), SPAN)?;
+
+        assert_eq!(texts(&rows, VALUE_COLUMN)?, [FIRST_VALUE, SECOND_VALUE]);
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn keeps_a_hidden_variable() -> TestResult {
+        let config = git::Config::from_occurrences([
+            keyed(HIDDEN_KEY, occurrence(text(ONE), &origin_at(FIRST_FILE)))?,
+            keyed(
+                HIDDEN_SUBSECTION_KEY,
+                occurrence(text(TWO), &origin_at(SECOND_FILE)),
+            )?,
+        ]);
+
+        let rows = rows(&config.tree(), SPAN)?;
 
         assert_eq!(
-            record.columns().map(String::as_str).collect::<Vec<_>>(),
-            vec![BETA, SUB, ZETA]
+            texts(&rows, KEY_COLUMN)?,
+            [HIDDEN_KEY, HIDDEN_SUBSECTION_KEY]
         );
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn valueless_is_null_and_empty_is_empty_string() -> TestResult {
+        let config = git::Config::from_occurrences([
+            keyed(
+                BARE_KEY,
+                occurrence(git::RawValue::Valueless, &origin_at(FIRST_FILE)),
+            )?,
+            keyed(
+                NAME_KEY,
+                occurrence(text(EMPTY_TEXT), &origin_at(FIRST_FILE)),
+            )?,
+        ]);
+
+        let rows = rows(&config.tree(), SPAN)?;
+
+        let values: Vec<&Value> = rows
+            .iter()
+            .map(|row| record_column(row, VALUE_COLUMN))
+            .collect::<Result<_, _>>()?;
+
         assert_eq!(
-            record.get(SUB),
-            Some(&Value::record(
-                record! { GAMMA => Value::test_string(THREE) },
+            values,
+            [&Value::nothing(SPAN), &Value::string(EMPTY_TEXT, SPAN)]
+        );
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::known_list_key(HELPER_KEY)]
+    #[case::unknown_key(UNKNOWN_KEY)]
+    fn reset_marker_is_empty_string(#[case] key: &str) -> TestResult {
+        let config = git::Config::from_occurrences([
+            keyed(key, occurrence(text(ADA), &origin_at(FIRST_FILE)))?,
+            keyed(key, occurrence(text(EMPTY_TEXT), &origin_at(SECOND_FILE)))?,
+        ]);
+
+        let rows = rows(&config.tree(), SPAN)?;
+
+        assert_eq!(texts(&rows, VALUE_COLUMN)?, [ADA, EMPTY_TEXT]);
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.as_record().ok().map(Record::len))
+                .collect::<Vec<_>>(),
+            [Some(4), Some(4)]
+        );
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn value_is_always_text() -> TestResult {
+        let config = git::Config::from_occurrences([keyed(
+            AUTO_KEY,
+            occurrence(text(FIVE), &origin_at(FIRST_FILE)),
+        )?]);
+
+        let rows = rows(&config.tree(), SPAN)?;
+
+        assert_eq!(texts(&rows, VALUE_COLUMN)?, [FIVE]);
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn scope_and_file() -> TestResult {
+        let cli = Arc::new(git::Origin {
+            path: None,
+            source: Source::Cli,
+        });
+        let config = git::Config::from_occurrences([
+            keyed(NAME_KEY, occurrence(text(ADA), &cli))?,
+            keyed(
+                BARE_KEY,
+                occurrence(text(TRUE_TEXT), &origin_at("/p/config")),
+            )?,
+        ]);
+
+        let rows = rows(&config.tree(), SPAN)?;
+
+        assert_eq!(texts(&rows, SCOPE_COLUMN)?, [LOCAL_SCOPE, COMMAND_SCOPE]);
+
+        let files: Vec<&Value> = rows
+            .iter()
+            .map(|row| record_column(row, FILE_COLUMN))
+            .collect::<Result<_, _>>()?;
+
+        assert_eq!(
+            files,
+            [&Value::string("/p/config", SPAN), &Value::nothing(SPAN)]
+        );
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn non_utf8_value_is_an_error() -> TestResult {
+        let config = git::Config::from_occurrences([keyed(
+            NAME_KEY,
+            occurrence(
+                git::RawValue::Bytes(NON_UTF8_BYTES.to_vec()),
+                &origin_at(FIRST_FILE),
+            ),
+        )?]);
+
+        let result = rows(&config.tree(), SPAN);
+
+        assert_matches!(result, Err(git::GixError::ConfigValueNotUtf8 { .. }));
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn non_utf8_subsection_is_an_error() {
+        let config = git::Config::from_occurrences([(
+            git::ConfigKey::new(
+                git::SectionName::from(REMOTE),
+                Some(git::Subsection::from(NON_UTF8_BYTES)),
+                git::VariableName::from(URL),
+            ),
+            occurrence(text(URL_VALUE), &origin_at(SECOND_FILE)),
+        )]);
+
+        let result = rows(&config.tree(), SPAN);
+
+        assert_matches!(result, Err(git::GixError::ConfigSubsectionNotUtf8 { .. }));
+    }
+}
+
+mod everything {
+    use super::*;
+
+    const FETCH_KEY: &str = "remote.o.fetch";
+    const FIRST_REFSPEC: &str = "+refs/heads/a:refs/remotes/o/a";
+    const SECOND_REFSPEC: &str = "+refs/heads/b:refs/remotes/o/b";
+    const MIXED_CASE_BARE_KEY: &str = "Core.Bare";
+    const MIXED_CASE_SUBSECTION_KEY: &str = "remote.Origin.url";
+    const MIXED_CASE_SUBSECTION: &str = "Origin";
+    const BARE: &str = "bare";
+    const CORE: &str = "core";
+    const NAME: &str = "name";
+    const AUTO: &str = "auto";
+    const GC: &str = "gc";
+    const FIVE: &str = "5";
+    const FETCH: &str = "fetch";
+    const A: &str = "a";
+    const X: &str = "x";
+    const Y: &str = "y";
+    const YES: &str = "yes";
+
+    fn root(value: &Value) -> Result<&Record, Box<TestError>> {
+        value
+            .as_record()
+            .map_err(|error| Box::new(TestError::Failure(error.to_string())))
+    }
+
+    #[rstest]
+    fn nests_sections_and_subsections() -> TestResult {
+        let config = git::Config::from_occurrences([
+            keyed(BARE_KEY, occurrence(text(YES), &origin_at(FIRST_FILE)))?,
+            keyed(NAME_KEY, occurrence(text(ADA), &origin_at(FIRST_FILE)))?,
+            keyed(
+                &format!("{REMOTE}.{ORIGIN}.{URL}"),
+                occurrence(text(URL_VALUE), &origin_at(FIRST_FILE)),
+            )?,
+        ]);
+
+        let value = everything(&config, SPAN)?;
+
+        assert_eq!(
+            value,
+            Value::record(
+                record! {
+                    CORE => Value::record(record! { BARE => Value::test_bool(true) }, SPAN),
+                    REMOTE => Value::record(
+                        record! {
+                            ORIGIN => Value::record(
+                                record! { URL => Value::test_list(vec![Value::test_string(URL_VALUE)]) },
+                                SPAN
+                            ),
+                        },
+                        SPAN
+                    ),
+                    USER => Value::record(record! { NAME => Value::test_string(ADA) }, SPAN),
+                },
                 SPAN
-            ))
+            )
+        );
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn lowercase_names_subsection_case_kept() -> TestResult {
+        let config = git::Config::from_occurrences([
+            keyed(
+                MIXED_CASE_BARE_KEY,
+                occurrence(text(YES), &origin_at(FIRST_FILE)),
+            )?,
+            keyed(
+                MIXED_CASE_SUBSECTION_KEY,
+                occurrence(text(URL_VALUE), &origin_at(FIRST_FILE)),
+            )?,
+        ]);
+
+        let value = everything(&config, SPAN)?;
+        let sections = root(&value)?;
+        let remote = sections
+            .get(REMOTE)
+            .ok_or_else(|| Box::new(TestError::Failure("no remote section".to_owned())))?;
+
+        assert!(sections.contains(CORE));
+        assert!(root(remote)?.contains(MIXED_CASE_SUBSECTION));
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn known_list_key_is_a_list() -> TestResult {
+        let config = git::Config::from_occurrences([
+            keyed(
+                FETCH_KEY,
+                occurrence(text(FIRST_REFSPEC), &origin_at(FIRST_FILE)),
+            )?,
+            keyed(
+                FETCH_KEY,
+                occurrence(text(SECOND_REFSPEC), &origin_at(SECOND_FILE)),
+            )?,
+        ]);
+
+        let value = everything(&config, SPAN)?;
+
+        assert_eq!(
+            value,
+            Value::record(
+                record! {
+                    REMOTE => Value::record(
+                        record! {
+                            "o" => Value::record(
+                                record! {
+                                    FETCH => Value::test_list(vec![
+                                        Value::test_string(FIRST_REFSPEC),
+                                        Value::test_string(SECOND_REFSPEC),
+                                    ]),
+                                },
+                                SPAN
+                            ),
+                        },
+                        SPAN
+                    ),
+                },
+                SPAN
+            )
+        );
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn unknown_repeated_key_is_the_last_value() -> TestResult {
+        let config = git::Config::from_occurrences([
+            keyed(
+                NAME_KEY,
+                occurrence(text(FIRST_VALUE), &origin_at(FIRST_FILE)),
+            )?,
+            keyed(
+                NAME_KEY,
+                occurrence(text(SECOND_VALUE), &origin_at(SECOND_FILE)),
+            )?,
+        ]);
+
+        let value = everything(&config, SPAN)?;
+
+        assert_eq!(
+            value,
+            Value::record(
+                record! {
+                    USER => Value::record(record! { NAME => Value::test_string(SECOND_VALUE) }, SPAN),
+                },
+                SPAN
+            )
+        );
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn known_int_is_int() -> TestResult {
+        let config = git::Config::from_occurrences([keyed(
+            AUTO_KEY,
+            occurrence(text(FIVE), &origin_at(FIRST_FILE)),
+        )?]);
+
+        let value = everything(&config, SPAN)?;
+
+        assert_eq!(
+            value,
+            Value::record(
+                record! { GC => Value::record(record! { AUTO => Value::test_int(5) }, SPAN) },
+                SPAN
+            )
+        );
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn subsection_hides_variable_of_its_name() -> TestResult {
+        let config = git::Config::from_occurrences([
+            keyed(
+                &format!("{A}.{X}"),
+                occurrence(text(ONE), &origin_at(FIRST_FILE)),
+            )?,
+            keyed(
+                &format!("{A}.{X}.{Y}"),
+                occurrence(text(TWO), &origin_at(SECOND_FILE)),
+            )?,
+        ]);
+
+        let value = everything(&config, SPAN)?;
+
+        assert_eq!(
+            value,
+            Value::record(
+                record! {
+                    A => Value::record(
+                        record! {
+                            X => Value::record(record! { Y => Value::test_string(TWO) }, SPAN),
+                        },
+                        SPAN
+                    ),
+                },
+                SPAN
+            )
         );
 
         Ok(())
@@ -794,304 +1087,18 @@ mod read_section {
         let config = git::Config::from_occurrences([
             keyed(HELPER_KEY, occurrence(text(""), &origin_at(FIRST_FILE)))?,
             keyed(
-                &format!("{CREDENTIAL}.{OTHER}"),
-                occurrence(text(OTHER_VALUE), &origin_at(FIRST_FILE)),
-            )?,
-        ]);
-
-        let group = read_section(&config, &git::SectionName::from(CREDENTIAL), SPAN)?;
-
-        assert_eq!(
-            record_of(group)?,
-            record! { OTHER => Value::test_string(OTHER_VALUE) }
-        );
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn section_of_only_resets_is_all_reset() -> TestResult {
-        let config = git::Config::from_occurrences([keyed(
-            HELPER_KEY,
-            occurrence(text(""), &origin_at(FIRST_FILE)),
-        )?]);
-
-        let group = read_section(&config, &git::SectionName::from(CREDENTIAL), SPAN)?;
-
-        assert_matches!(group, Group::AllReset);
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn unknown_section_is_missing() -> TestResult {
-        let config = git::Config::default();
-
-        let group = read_section(&config, &git::SectionName::from(SECTION_ABSENT), SPAN)?;
-
-        assert_matches!(group, Group::Missing);
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn variable_and_subsection_of_one_name_clash() -> TestResult {
-        let config = git::Config::from_occurrences([
-            keyed(
-                &format!("{SECTION}.{SHARED}"),
-                occurrence(text(ONE), &origin_at(FIRST_FILE)),
-            )?,
-            keyed(
-                &format!("{SECTION}.{SHARED}.{MEMBER}"),
-                occurrence(text(TWO), &origin_at(SECOND_FILE)),
-            )?,
-        ]);
-
-        let result = read_section(&config, &git::SectionName::from(SECTION), SPAN);
-
-        assert_matches!(
-            result,
-            Err(git::GixError::ConfigNameClash { section, name, variable_origin, subsection_origin })
-                if section == git::SectionName::from(SECTION)
-                    && name == git::VariableName::from(SHARED)
-                    && variable_origin.path == Some(PathBuf::from(FIRST_FILE))
-                    && subsection_origin.path == Some(PathBuf::from(SECOND_FILE))
-        );
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn fully_reset_clashing_variable_is_no_error() -> TestResult {
-        let config = git::Config::from_occurrences([
-            keyed(HELPER_KEY, occurrence(text(""), &origin_at(FIRST_FILE)))?,
-            keyed(
-                &format!("{CREDENTIAL}.{HELPER}.{MEMBER}"),
-                occurrence(text(TWO), &origin_at(SECOND_FILE)),
-            )?,
-        ]);
-
-        let group = read_section(&config, &git::SectionName::from(CREDENTIAL), SPAN)?;
-
-        assert_eq!(
-            record_of(group)?,
-            record! {
-                HELPER => Value::record(record! { MEMBER => Value::test_string(TWO) }, SPAN),
-            }
-        );
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn subsection_differing_in_case_does_not_clash() -> TestResult {
-        let config = git::Config::from_occurrences([
-            keyed(
-                &format!("{SECTION}.{SHARED}"),
-                occurrence(text(ONE), &origin_at(FIRST_FILE)),
-            )?,
-            keyed(
-                &format!("{SECTION}.{UPPER_SHARED}.{MEMBER}"),
-                occurrence(text(TWO), &origin_at(SECOND_FILE)),
-            )?,
-        ]);
-
-        let group = read_section(&config, &git::SectionName::from(SECTION), SPAN)?;
-
-        assert_eq!(
-            record_of(group)?,
-            record! {
-                UPPER_SHARED => Value::record(record! { MEMBER => Value::test_string(TWO) }, SPAN),
-                SHARED => Value::test_string(ONE),
-            }
-        );
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn non_utf8_subsection_of_the_section_is_an_error() {
-        let config = git::Config::from_occurrences([(
-            git::ConfigKey::new(
-                git::SectionName::from(REMOTE),
-                Some(git::Subsection::from(NON_UTF8_BYTES)),
-                git::VariableName::from(URL),
-            ),
-            occurrence(text(URL_VALUE), &origin_at(FIRST_FILE)),
-        )]);
-
-        let result = read_section(&config, &git::SectionName::from(REMOTE), SPAN);
-
-        assert_matches!(result, Err(git::GixError::ConfigSubsectionNotUtf8 { .. }));
-    }
-
-    #[rstest]
-    fn non_utf8_subsection_does_not_break_another_section() -> TestResult {
-        let config = git::Config::from_occurrences([
-            keyed(
-                &format!("{USER}.{HELPER}"),
+                &format!("{CREDENTIAL}.{NAME}"),
                 occurrence(text(ADA), &origin_at(FIRST_FILE)),
             )?,
-            (
-                git::ConfigKey::new(
-                    git::SectionName::from(REMOTE),
-                    Some(git::Subsection::from(NON_UTF8_BYTES)),
-                    git::VariableName::from(URL),
-                ),
-                occurrence(text(URL_VALUE), &origin_at(SECOND_FILE)),
-            ),
         ]);
 
-        let group = read_section(&config, &git::SectionName::from(USER), SPAN)?;
-
-        assert_eq!(
-            record_of(group)?,
-            record! { HELPER => Value::test_string(ADA) }
-        );
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn clash_names_the_first_emitted_variable_of_the_subsection() -> TestResult {
-        let config = git::Config::from_occurrences([
-            keyed(
-                &format!("{REMOTE}.{ORIGIN}.{URL}"),
-                occurrence(text(""), &origin_at(FIRST_FILE)),
-            )?,
-            keyed(
-                &format!("{REMOTE}.{ORIGIN}.{BETA}"),
-                occurrence(text(TWO), &origin_at(SECOND_FILE)),
-            )?,
-            keyed(
-                &format!("{REMOTE}.{ORIGIN}"),
-                occurrence(text(ONE), &origin_at(FIRST_FILE)),
-            )?,
-        ]);
-
-        let result = read_section(&config, &git::SectionName::from(REMOTE), SPAN);
-
-        assert_matches!(
-            result,
-            Err(git::GixError::ConfigNameClash { subsection_origin, .. })
-                if subsection_origin.path == Some(PathBuf::from(SECOND_FILE))
-        );
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn clash_origin_of_a_list_variable_is_its_last_element() -> TestResult {
-        let config = git::Config::from_occurrences([
-            keyed(
-                INCLUDE_KEY,
-                occurrence(text(FIRST_VALUE), &origin_at(FIRST_FILE)),
-            )?,
-            keyed(
-                INCLUDE_KEY,
-                occurrence(text(SECOND_VALUE), &origin_at(SECOND_FILE)),
-            )?,
-            keyed(
-                &format!("{INCLUDE}.{PATH}.{MEMBER}"),
-                occurrence(text(TWO), &origin_at(FIRST_FILE)),
-            )?,
-        ]);
-
-        let result = read_section(&config, &git::SectionName::from(INCLUDE), SPAN);
-
-        assert_matches!(
-            result,
-            Err(git::GixError::ConfigNameClash { variable_origin, .. })
-                if variable_origin.path == Some(PathBuf::from(SECOND_FILE))
-        );
-
-        Ok(())
-    }
-}
-
-mod read_subsection {
-    use super::*;
-
-    #[rstest]
-    fn reads_members_of_a_subsection_that_clashes_with_a_variable() -> TestResult {
-        let config = git::Config::from_occurrences([
-            keyed(
-                &format!("{SECTION}.{SHARED}"),
-                occurrence(text(ONE), &origin_at(FIRST_FILE)),
-            )?,
-            keyed(
-                &format!("{SECTION}.{SHARED}.{MEMBER}"),
-                occurrence(text(TWO), &origin_at(SECOND_FILE)),
-            )?,
-        ]);
-
-        let group = read_subsection(
-            &config,
-            &git::SectionName::from(SECTION),
-            &git::Subsection::from(SHARED),
-            SPAN,
-        )?;
-
-        assert_eq!(
-            record_of(group)?,
-            record! { MEMBER => Value::test_string(TWO) }
-        );
-
-        Ok(())
-    }
-
-    #[rstest]
-    fn unset_subsection_is_missing() -> TestResult {
-        let config = git::Config::default();
-
-        let group = read_subsection(
-            &config,
-            &git::SectionName::from(REMOTE),
-            &git::Subsection::from(ORIGIN),
-            SPAN,
-        )?;
-
-        assert_matches!(group, Group::Missing);
-
-        Ok(())
-    }
-}
-
-mod read_all {
-    use super::*;
-
-    #[rstest]
-    fn nests_sections_and_subsections() -> TestResult {
-        let config = git::Config::from_occurrences([
-            keyed(
-                &format!("{USER}.{HELPER}"),
-                occurrence(text(ADA), &origin_at(FIRST_FILE)),
-            )?,
-            keyed(
-                &format!("{REMOTE}.{ORIGIN}.{URL}"),
-                occurrence(text(URL_VALUE), &origin_at(FIRST_FILE)),
-            )?,
-        ]);
-
-        let value = read_all(&config, SPAN)?;
+        let value = everything(&config, SPAN)?;
 
         assert_eq!(
             value,
             Value::record(
                 record! {
-                    REMOTE => Value::record(
-                        record! {
-                            ORIGIN => Value::record(
-                                record! { URL => Value::test_list(vec![Value::test_string(URL_VALUE)]) },
-                                SPAN
-                            ),
-                        },
-                        SPAN
-                    ),
-                    USER => Value::record(
-                        record! { HELPER => Value::test_string(ADA) },
-                        SPAN
-                    ),
+                    CREDENTIAL => Value::record(record! { NAME => Value::test_string(ADA) }, SPAN),
                 },
                 SPAN
             )
@@ -1104,18 +1111,15 @@ mod read_all {
     fn section_of_only_resets_is_absent() -> TestResult {
         let config = git::Config::from_occurrences([
             keyed(HELPER_KEY, occurrence(text(""), &origin_at(FIRST_FILE)))?,
-            keyed(
-                &format!("{USER}.{HELPER}"),
-                occurrence(text(ADA), &origin_at(FIRST_FILE)),
-            )?,
+            keyed(NAME_KEY, occurrence(text(ADA), &origin_at(FIRST_FILE)))?,
         ]);
 
-        let value = read_all(&config, SPAN)?;
+        let value = everything(&config, SPAN)?;
 
         assert_eq!(
             value,
             Value::record(
-                record! { USER => Value::record(record! { HELPER => Value::test_string(ADA) }, SPAN) },
+                record! { USER => Value::record(record! { NAME => Value::test_string(ADA) }, SPAN) },
                 SPAN
             )
         );
@@ -1124,45 +1128,138 @@ mod read_all {
     }
 
     #[rstest]
-    fn variable_and_subsection_of_one_name_clash() -> TestResult {
-        let config = git::Config::from_occurrences([
-            keyed(
-                &format!("{SECTION}.{SHARED}"),
-                occurrence(text(ONE), &origin_at(FIRST_FILE)),
-            )?,
-            keyed(
-                &format!("{SECTION}.{SHARED}.{MEMBER}"),
-                occurrence(text(TWO), &origin_at(SECOND_FILE)),
-            )?,
-        ]);
+    fn non_utf8_subsection_is_an_error() {
+        let config = git::Config::from_occurrences([(
+            git::ConfigKey::new(
+                git::SectionName::from(REMOTE),
+                Some(git::Subsection::from(NON_UTF8_BYTES)),
+                git::VariableName::from(URL),
+            ),
+            occurrence(text(URL_VALUE), &origin_at(SECOND_FILE)),
+        )]);
 
-        let result = read_all(&config, SPAN);
+        let result = everything(&config, SPAN);
 
-        assert_matches!(result, Err(git::GixError::ConfigNameClash { .. }));
+        assert_matches!(result, Err(git::GixError::ConfigSubsectionNotUtf8 { .. }));
+    }
+
+    #[rstest]
+    fn known_bool_that_does_not_convert_is_an_error() -> TestResult {
+        let config = git::Config::from_occurrences([keyed(
+            BARE_KEY,
+            occurrence(text(BANANA_TEXT), &origin_at(FIRST_FILE)),
+        )?]);
+
+        let result = everything(&config, SPAN);
+
+        assert_matches!(result, Err(git::GixError::ConfigValueConversion { .. }));
+
+        Ok(())
+    }
+}
+
+mod lookup_value {
+    use super::*;
+
+    const CORE: &str = "core";
+    const BARE: &str = "bare";
+    const FETCH_KEY: &str = "remote.o.fetch";
+    const FETCH_VALUE: &str = "+refs/heads/a:refs/remotes/o/a";
+
+    fn lookup(
+        config: &git::Config,
+        path: &git::ConfigPath,
+    ) -> Result<Option<Value>, Box<TestError>> {
+        let tree = config.tree();
+
+        tree.get(path)
+            .map(|node| lookup_value(node, SPAN))
+            .transpose()
+            .map(Option::flatten)
+            .map_err(Into::into)
+    }
+
+    #[rstest]
+    fn setting_is_its_untyped_value() -> TestResult {
+        let config = git::Config::from_occurrences([keyed(
+            BARE_KEY,
+            occurrence(text(TRUE_TEXT), &origin_at(FIRST_FILE)),
+        )?]);
+
+        let value = lookup(&config, &git::ConfigPath::member(CORE, BARE)?)?;
+
+        assert_eq!(value, Some(Value::test_bool(true)));
 
         Ok(())
     }
 
     #[rstest]
-    fn non_utf8_subsection_is_an_error() -> TestResult {
+    fn known_list_setting_is_a_list() -> TestResult {
+        let config = git::Config::from_occurrences([keyed(
+            FETCH_KEY,
+            occurrence(text(FETCH_VALUE), &origin_at(FIRST_FILE)),
+        )?]);
+
+        let value = lookup(&config, &git::ConfigPath::variable(REMOTE, "o", "fetch")?)?;
+
+        assert_eq!(
+            value,
+            Some(Value::list(vec![Value::test_string(FETCH_VALUE)], SPAN))
+        );
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn reset_setting_is_an_error() -> TestResult {
+        let origin = origin_at(FIRST_FILE);
         let config = git::Config::from_occurrences([
-            keyed(
-                &format!("{USER}.{HELPER}"),
-                occurrence(text(ADA), &origin_at(FIRST_FILE)),
-            )?,
-            (
-                git::ConfigKey::new(
-                    git::SectionName::from(REMOTE),
-                    Some(git::Subsection::from(NON_UTF8_BYTES)),
-                    git::VariableName::from(URL),
-                ),
-                occurrence(text(URL_VALUE), &origin_at(SECOND_FILE)),
-            ),
+            keyed(HELPER_KEY, occurrence(text(HELPER), &origin))?,
+            keyed(HELPER_KEY, occurrence(text(""), &origin))?,
         ]);
 
-        let result = read_all(&config, SPAN);
+        let result = lookup(&config, &git::ConfigPath::member(CREDENTIAL, "helper")?);
 
-        assert_matches!(result, Err(git::GixError::ConfigSubsectionNotUtf8 { .. }));
+        assert_matches!(
+            result.map_err(|error| *error),
+            Err(TestError::Gix(error))
+                if matches!(error.as_ref(), git::GixError::ConfigKeyReset { .. })
+        );
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn all_reset_section_is_none() -> TestResult {
+        let origin = origin_at(FIRST_FILE);
+        let config = git::Config::from_occurrences([
+            keyed(HELPER_KEY, occurrence(text(HELPER), &origin))?,
+            keyed(HELPER_KEY, occurrence(text(""), &origin))?,
+        ]);
+
+        let value = lookup(&config, &git::ConfigPath::section(CREDENTIAL)?)?;
+
+        assert_eq!(value, None);
+
+        Ok(())
+    }
+
+    #[rstest]
+    fn subsection_is_its_record() -> TestResult {
+        let config = git::Config::from_occurrences([keyed(
+            FETCH_KEY,
+            occurrence(text(FETCH_VALUE), &origin_at(FIRST_FILE)),
+        )?]);
+
+        let value = lookup(&config, &git::ConfigPath::member(REMOTE, "o")?)?;
+
+        assert_eq!(
+            value,
+            Some(Value::record(
+                record! { "fetch" => Value::list(vec![Value::test_string(FETCH_VALUE)], SPAN) },
+                SPAN
+            ))
+        );
 
         Ok(())
     }

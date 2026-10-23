@@ -1,5 +1,7 @@
 //! Reads the configuration of a repository as Nushell values: the occurrences a key resolves to, their typed or untyped
-//! values, and the records of sections and subsections.
+//! values, and the records of sections and subsections, including [`everything`], the whole configuration as one
+//! nested record built from the core tree, [`rows`], the flat table of every occurrence, and [`typed_setting`], one
+//! variable read as a type.
 
 #[cfg(test)]
 #[path = "config_read_tests.rs"]
@@ -8,14 +10,18 @@ mod tests;
 use super::config_known::{self, KnownKey, Multi, ValueKind};
 
 use nu_plugin_gix_core as git;
-use nu_protocol::{Record, Span, Value};
+use nu_protocol::{Record, Span, Value, record};
 
-use std::{
-    collections::{BTreeMap, btree_map::Entry},
-    iter,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{iter, path::PathBuf, str::Utf8Error, sync::Arc};
+
+/// The column of the key in the table.
+const KEY_COLUMN: &str = "key";
+/// The column of the value in the table.
+const VALUE_COLUMN: &str = "value";
+/// The column of the scope in the table.
+const SCOPE_COLUMN: &str = "scope";
+/// The column of the file in the table.
+const FILE_COLUMN: &str = "file";
 
 /// What a key resolves to: the values that count, or the last value that emptied a list-valued key, which then has none.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,187 +77,10 @@ impl<'a> Values<'a> {
     }
 }
 
-/// A section or subsection read as a record, or why there is none.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Group {
-    /// No key of the group is set.
-    Missing,
-    /// Keys of the group are set, but resets removed all their values.
-    AllReset,
-    /// The values of the group, with each subsection nested as a record.
-    Record(Record),
-}
-
 /// The value of one key that has a value and the occurrence it is attributed to (`Values::attributed`).
 struct Found<'a> {
     value: Value,
     from: &'a git::Occurrence,
-}
-
-/// The variables of one subsection by name, the columns of its record.
-#[derive(Debug, Default)]
-struct Members(BTreeMap<String, Value>);
-
-/// A subsection of a section with its variables, and the origin of its first emitted variable: a variable that a reset
-/// removed is not emitted, so it does not count.
-#[derive(Debug)]
-struct Subsection {
-    members: Members,
-    origin: Arc<git::Origin>,
-}
-
-/// A column of a section record: a variable, or a subsection with its variables.
-#[derive(Debug)]
-enum Column {
-    Variable {
-        name: git::VariableName,
-        value: Value,
-        origin: Arc<git::Origin>,
-    },
-    Subsection(Subsection),
-}
-
-/// The columns of one section by their text. A variable and a subsection of one text are two kinds of one column: one
-/// map, so they cannot both exist, whatever the order they are inserted in. The map order is the column order.
-#[derive(Debug, Default)]
-struct Nest {
-    columns: BTreeMap<String, Column>,
-}
-
-impl Members {
-    /// Adds the variable `name` with `value`.
-    fn insert(&mut self, name: String, value: Value) {
-        self.0.insert(name, value);
-    }
-
-    /// The record of the variables.
-    fn into_record(self) -> Record {
-        self.0.into_iter().collect()
-    }
-}
-
-impl Nest {
-    /// Adds the value of `key` from its occurrences, unless no occurrence counts or a reset removed all of them.
-    fn insert_key(
-        &mut self,
-        key: &git::ConfigKey,
-        occurrences: &[git::Occurrence],
-        span: Span,
-    ) -> Result<(), git::GixError> {
-        match member(key, occurrences, span)? {
-            None => Ok(()),
-            Some(found) => match &key.subsection() {
-                None => self.insert_variable(key, found),
-                Some(subsection) => {
-                    let text = subsection.to_text().map_err(|source| {
-                        git::GixError::ConfigSubsectionNotUtf8 {
-                            key: key.clone(),
-                            source,
-                            origin: Arc::clone(&found.from.origin),
-                        }
-                    })?;
-
-                    self.insert_subsection_member(key, text, found)
-                }
-            },
-        }
-    }
-
-    /// Adds `found` as a variable of the section, unless a subsection of its name is already a column. A key occurs
-    /// once in `Config`; a variable of the same name would be replaced by the later one.
-    fn insert_variable(
-        &mut self,
-        key: &git::ConfigKey,
-        found: Found<'_>,
-    ) -> Result<(), git::GixError> {
-        let column = Column::Variable {
-            name: key.name().clone(),
-            value: found.value,
-            origin: Arc::clone(&found.from.origin),
-        };
-
-        match self.columns.entry(key.name().as_str().to_owned()) {
-            Entry::Vacant(slot) => {
-                slot.insert(column);
-            }
-            Entry::Occupied(mut taken) => {
-                if let Column::Subsection(subsection) = taken.get() {
-                    return Err(name_clash(
-                        key.section(),
-                        key.name(),
-                        Arc::clone(&found.from.origin),
-                        Arc::clone(&subsection.origin),
-                    ));
-                }
-
-                taken.insert(column);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Adds `found` as a variable of the subsection `subsection` of the section, unless a variable of its name is
-    /// already a column. The subsection's origin is that of its first member.
-    fn insert_subsection_member(
-        &mut self,
-        key: &git::ConfigKey,
-        subsection: &str,
-        found: Found<'_>,
-    ) -> Result<(), git::GixError> {
-        match self.columns.entry(subsection.to_owned()) {
-            Entry::Vacant(slot) => {
-                let mut members = Members::default();
-                members.insert(key.name().as_str().to_owned(), found.value);
-                slot.insert(Column::Subsection(Subsection {
-                    members,
-                    origin: Arc::clone(&found.from.origin),
-                }));
-
-                Ok(())
-            }
-            Entry::Occupied(mut taken) => match taken.get_mut() {
-                Column::Variable {
-                    name,
-                    origin,
-                    value: _value,
-                } => Err(name_clash(
-                    key.section(),
-                    name,
-                    Arc::clone(origin),
-                    Arc::clone(&found.from.origin),
-                )),
-                Column::Subsection(existing) => {
-                    existing
-                        .members
-                        .insert(key.name().as_str().to_owned(), found.value);
-
-                    Ok(())
-                }
-            },
-        }
-    }
-
-    /// The record of the variables and subsections, with the columns in alphabetical order.
-    fn into_record(self, span: Span) -> Record {
-        self.columns
-            .into_iter()
-            .map(|(text, column)| {
-                let value = match column {
-                    Column::Variable {
-                        value,
-                        name: _name,
-                        origin: _origin,
-                    } => value,
-                    Column::Subsection(subsection) => {
-                        Value::record(subsection.members.into_record(), span)
-                    }
-                };
-
-                (text, value)
-            })
-            .collect()
-    }
 }
 
 /// Resolves the occurrences of a key to the one that counts, by the known row of the key (`None` for an unknown key).
@@ -300,30 +129,9 @@ pub fn untyped_value(
     }
 }
 
-/// The untyped value of `key`, or `None` when the key is unset.
-///
-/// # Errors
-///
-/// Returns [`git::GixError::ConfigKeyReset`] when a reset removed all the values, and the errors of [`untyped_value`]
-/// for the value the key resolves to.
-pub fn read_variable(
-    config: &git::Config,
-    key: &git::ConfigKey,
-    span: Span,
-) -> Result<Option<Value>, git::GixError> {
-    match resolve(config_known::known(key), config.occurrences(key).iter()) {
-        None => Ok(None),
-        Some(resolved) => {
-            let values = values_of(key, resolved)?;
-
-            untyped_value(key, &values, span).map(Some)
-        }
-    }
-}
-
-/// The value of `key` read as `ty`, the way `get --type` reads it. A path reads only the trusted occurrences, so an
-/// untrusted reset does not clear a trusted value. A list-valued key gives its last element. Null when the key is unset,
-/// or when an optional path does not exist.
+/// The value of `setting` read as `ty`, the way `gix config --type` reads it. A path reads only the trusted
+/// occurrences, so an untrusted reset does not clear a trusted value. A list-valued key gives its last element. Null
+/// when an optional path does not exist, or when no trusted occurrence is left for a path.
 ///
 /// # Errors
 ///
@@ -331,14 +139,14 @@ pub fn read_variable(
 /// the value that is read: [`git::GixError::ConfigValueMissing`], [`git::GixError::ConfigValueConversion`],
 /// [`git::GixError::ConfigValueNotUtf8`], [`git::GixError::InstallDirUnavailable`] and
 /// [`git::GixError::ConfigPathNotUtf8`].
-pub fn read_typed(
-    config: &git::Config,
-    key: &git::ConfigKey,
+pub fn typed_setting(
+    setting: &git::Setting<'_>,
     ty: git::ConfigType,
     paths: &git::PathContext,
     span: Span,
 ) -> Result<Value, git::GixError> {
-    let occurrences = config.occurrences(key);
+    let key = setting.key();
+    let occurrences = setting.occurrences();
     let resolved = match ty {
         git::ConfigType::Scalar(_) => resolve(config_known::known(key), occurrences.iter()),
         git::ConfigType::Path => resolve(
@@ -357,86 +165,180 @@ pub fn read_typed(
     }
 }
 
-/// The section `section` as a record of its variables and subsections, or why it has none. Keys that a reset removed
-/// are left out.
+/// Every setting of the configuration as the rows of the flat table `key`, `value`, `scope`, `file`: one row per
+/// occurrence, sorted by key, and the occurrences of one key in load order.
 ///
 /// # Errors
 ///
-/// Returns [`git::GixError::ConfigNameClash`] when a variable and a subsection of the section have the same name,
-/// [`git::GixError::ConfigSubsectionNotUtf8`] for a subsection of the section that is not UTF-8, and the errors of
-/// [`untyped_value`].
-pub fn read_section(
-    config: &git::Config,
-    section: &git::SectionName,
-    span: Span,
-) -> Result<Group, git::GixError> {
-    let mut nest = Nest::default();
-    let mut seen = false;
-
-    for (key, occurrences) in config.iter().filter(|(key, _)| key.section() == section) {
-        seen = true;
-        nest.insert_key(key, occurrences, span)?;
-    }
-
-    Ok(group_of(seen, nest.into_record(span)))
+/// Returns [`git::GixError::ConfigSubsectionNotUtf8`] for a subsection that is not UTF-8, and
+/// [`git::GixError::ConfigValueNotUtf8`] or [`git::GixError::ConfigPathNotUtf8`] for a value or file that is not.
+pub fn rows(tree: &git::ConfigTree<'_>, span: Span) -> Result<Vec<Value>, git::GixError> {
+    tree.settings()
+        .into_iter()
+        .flat_map(|setting| {
+            setting
+                .occurrences()
+                .iter()
+                .map(move |occurrence| (setting.key(), occurrence))
+        })
+        .map(|(key, occurrence)| row(key, occurrence, span))
+        .collect()
 }
 
-/// The subsection `subsection` of `section` as a record of its variables, or why it has none. Keys that a reset
-/// removed are left out.
-///
-/// # Errors
-///
-/// Returns the errors of [`untyped_value`] for a value of the subsection.
-pub fn read_subsection(
-    config: &git::Config,
-    section: &git::SectionName,
-    subsection: &git::Subsection,
+/// The row of one occurrence: its key as text, its value as text (null when valueless), its scope and its file.
+fn row(
+    key: &git::ConfigKey,
+    occurrence: &git::Occurrence,
     span: Span,
-) -> Result<Group, git::GixError> {
-    let mut members = Members::default();
-    let mut seen = false;
+) -> Result<Value, git::GixError> {
+    let key_text = key.to_text().map_err(not_utf8(key, &occurrence.origin))?;
+    let value = occurrence_value(key, occurrence, ValueKind::Text, span)?;
+    let file = occurrence.origin.path.as_ref().map_or_else(
+        || Ok(Value::nothing(span)),
+        |path| path_text(key, occurrence, path.clone()).map(|text| Value::string(text, span)),
+    )?;
 
-    for (key, occurrences) in config
-        .iter()
-        .filter(|(key, _)| key.section() == section && key.subsection() == Some(subsection))
-    {
-        seen = true;
-
-        if let Some(found) = member(key, occurrences, span)? {
-            members.insert(key.name().as_str().to_owned(), found.value);
-        }
-    }
-
-    Ok(group_of(seen, members.into_record()))
+    Ok(Value::record(
+        record! {
+            KEY_COLUMN => Value::string(key_text, span),
+            VALUE_COLUMN => value,
+            SCOPE_COLUMN => Value::string(occurrence.origin.scope().as_str(), span),
+            FILE_COLUMN => file,
+        },
+        span,
+    ))
 }
 
-/// Every section of the configuration as a record of its variables and subsections, with the sections of only reset
-/// keys left out.
+/// The whole configuration as one nested record: a column per section, and a record per subsection inside it. A
+/// variable, section or subsection with no value left after resets is omitted.
 ///
 /// # Errors
 ///
-/// Returns the errors of [`read_section`] for any section.
-pub fn read_all(config: &git::Config, span: Span) -> Result<Value, git::GixError> {
-    let mut sections: BTreeMap<&str, Nest> = BTreeMap::new();
-
-    for (key, occurrences) in config.iter() {
-        sections
-            .entry(key.section().as_str())
-            .or_default()
-            .insert_key(key, occurrences, span)?;
-    }
-
+/// Returns [`git::GixError::ConfigSubsectionNotUtf8`] for a subsection that is not UTF-8 and has a column, and the
+/// errors of [`untyped_value`].
+pub fn everything(config: &git::Config, span: Span) -> Result<Value, git::GixError> {
+    let tree = config.tree();
     let mut root = Record::new();
 
-    for (section, nest) in sections {
-        let record = nest.into_record(span);
+    for (name, section) in tree.sections() {
+        let record = section_record(section, span)?;
 
         if !record.is_empty() {
-            root.insert(section, Value::record(record, span));
+            root.insert(name.as_str(), Value::record(record, span));
         }
     }
 
     Ok(Value::record(root, span))
+}
+
+/// The value a tree node holds: the record of a section or subsection, `None` when no column is left in it, or the
+/// untyped value of a variable. A subsection node found by `ConfigTree::get` was named by a `&str`, so its name is
+/// UTF-8 and is not decoded here.
+///
+/// # Errors
+///
+/// Returns [`git::GixError::ConfigKeyReset`] when a reset removed all the values of a variable, and the errors of
+/// [`everything`] for a record.
+pub fn lookup_value(node: git::Node<'_>, span: Span) -> Result<Option<Value>, git::GixError> {
+    match node {
+        git::Node::Section(section) => Ok(Some(section_record(section, span)?)
+            .filter(|record| !record.is_empty())
+            .map(|record| Value::record(record, span))),
+        git::Node::Subsection(subsection) => Ok(subsection_members(subsection, span)?
+            .map(|members| Value::record(members.record, span))),
+        git::Node::Setting(setting) => resolve(
+            config_known::known(setting.key()),
+            setting.occurrences().iter(),
+        )
+        .map(|resolved| {
+            let values = values_of(setting.key(), resolved)?;
+
+            untyped_value(setting.key(), &values, span)
+        })
+        .transpose(),
+    }
+}
+
+/// The text of `subsection`, the subsection of `key`, wrapping a decoding failure with the `origin` the key was read
+/// from.
+///
+/// # Errors
+///
+/// Returns [`git::GixError::ConfigSubsectionNotUtf8`] when the subsection is not valid UTF-8.
+pub fn subsection_text<'a>(
+    key: &git::ConfigKey,
+    subsection: &'a git::Subsection,
+    origin: &Arc<git::Origin>,
+) -> Result<&'a str, git::GixError> {
+    subsection.to_text().map_err(not_utf8(key, origin))
+}
+
+/// The error for a subsection of `key` that is not UTF-8, naming where `key` was read.
+fn not_utf8(
+    key: &git::ConfigKey,
+    origin: &Arc<git::Origin>,
+) -> impl FnOnce(Utf8Error) -> git::GixError {
+    let key = key.clone();
+    let origin = Arc::clone(origin);
+
+    move |source| git::GixError::ConfigSubsectionNotUtf8 {
+        key,
+        source,
+        origin,
+    }
+}
+
+/// The record of one section: its variables and, nested, its subsections that have a column left.
+fn section_record(section: &git::SectionNode<'_>, span: Span) -> Result<Record, git::GixError> {
+    let mut record = Record::new();
+
+    for entry in section.entries() {
+        match entry {
+            git::Entry::Setting(setting) => {
+                if let Some(found) = member(setting.key(), setting.occurrences(), span)? {
+                    record.insert(setting.key().name().as_str(), found.value);
+                }
+            }
+            git::Entry::Subsection(node) => {
+                if let Some(members) = subsection_members(node, span)? {
+                    let text = subsection_text(members.key, node.subsection(), &members.origin)?;
+
+                    record.insert(text, Value::record(members.record, span));
+                }
+            }
+        }
+    }
+
+    Ok(record)
+}
+
+/// The variables of a subsection that have a value left, with the first key and origin that carry one.
+struct Members<'a> {
+    record: Record,
+    key: &'a git::ConfigKey,
+    origin: Arc<git::Origin>,
+}
+
+/// The members of a subsection, or `None` when no variable has a value left.
+fn subsection_members<'a>(
+    node: &git::SubsectionNode<'a>,
+    span: Span,
+) -> Result<Option<Members<'a>>, git::GixError> {
+    let mut record = Record::new();
+    let mut first: Option<(&'a git::ConfigKey, Arc<git::Origin>)> = None;
+
+    for setting in node.settings() {
+        if let Some(found) = member(setting.key(), setting.occurrences(), span)? {
+            record.insert(setting.key().name().as_str(), found.value);
+            first.get_or_insert_with(|| (setting.key(), Arc::clone(&found.from.origin)));
+        }
+    }
+
+    Ok(first.map(|(key, origin)| Members {
+        record,
+        key,
+        origin,
+    }))
 }
 
 /// The value of `key` as a group member, with the occurrence it is attributed to: `None` when a reset removed all the
@@ -481,16 +383,6 @@ where
 /// Whether an occurrence is an empty value (`name =`), which resets a list. A valueless occurrence is not.
 const fn is_empty_value(occurrence: &git::Occurrence) -> bool {
     matches!(&occurrence.value, git::RawValue::Bytes(bytes) if bytes.is_empty())
-}
-
-/// The group that `seen` keys with the record `record` make: missing when no key was seen, all reset when the
-/// record is empty.
-fn group_of(seen: bool, record: Record) -> Group {
-    match (seen, record.is_empty()) {
-        (false, _) => Group::Missing,
-        (true, true) => Group::AllReset,
-        (true, false) => Group::Record(record),
-    }
 }
 
 /// The value of one occurrence without `--type`: null when it is valueless, otherwise converted to the kind of its key.
@@ -581,21 +473,5 @@ fn values_of<'a>(
             key: key.clone(),
             origin: Arc::clone(&occurrence.origin),
         }),
-    }
-}
-
-/// The error for a variable and a subsection of one section that have the same text. `name` is the variable's own
-/// name, which equals the subsection text.
-fn name_clash(
-    section: &git::SectionName,
-    name: &git::VariableName,
-    variable_origin: Arc<git::Origin>,
-    subsection_origin: Arc<git::Origin>,
-) -> git::GixError {
-    git::GixError::ConfigNameClash {
-        section: section.clone(),
-        name: name.clone(),
-        variable_origin,
-        subsection_origin,
     }
 }

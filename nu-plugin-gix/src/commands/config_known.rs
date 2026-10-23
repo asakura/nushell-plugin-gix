@@ -10,7 +10,7 @@ use std::fmt;
 macro_rules! known_keys {
     ($(($section:literal, $name:literal, $rule:expr, $kind:expr, $multi:expr)),+ $(,)?) => {
         /// Git has no schema; this curated list is the plugin's read policy (user decisions U7, U10).
-        /// Read by `known` and by the help text of `gix config get`.
+        /// Read by `known` and by the help text of `gix config`.
         pub const TABLE: &[KnownKey] = &[
             $(KnownKey {
                 section: $section,
@@ -179,6 +179,8 @@ const fn subsection_matches(rule: SubsectionRule, has_subsection: bool) -> bool 
 mod tests {
     use super::*;
 
+    use crate::commands::config_key::key_for_test;
+
     use rstest::rstest;
 
     use std::assert_matches;
@@ -202,11 +204,11 @@ mod tests {
         use super::*;
 
         fn multi_of(text: &str) -> Result<Option<Multi>, TestError> {
-            Ok(known(&git::ConfigKey::parse(text)?).map(|row| row.multi))
+            Ok(known(&key_for_test(text)?).map(|row| row.multi))
         }
 
         fn kind_of(text: &str) -> Result<Option<ValueKind>, TestError> {
-            Ok(known(&git::ConfigKey::parse(text)?).map(|row| row.kind))
+            Ok(known(&key_for_test(text)?).map(|row| row.kind))
         }
 
         mod multi {
@@ -307,7 +309,7 @@ mod tests {
             #[case::includeif_without_subsection("includeif.path")]
             #[case::fetch_negotiationtip_is_not_a_git_variable("fetch.negotiationtip")]
             fn unknown_shape_is_none(#[case] text: &str) -> Result<(), TestError> {
-                assert_eq!(known(&git::ConfigKey::parse(text)?), None);
+                assert_eq!(known(&key_for_test(text)?), None);
 
                 Ok(())
             }
@@ -328,7 +330,7 @@ mod tests {
             #[case::http_lowspeedtime_without_url("http.lowspeedtime")]
             #[case::http_lowspeedtime_with_url("http.https://example.com.lowspeedtime")]
             fn either_rule_accepts_both_forms(#[case] text: &str) -> Result<(), TestError> {
-                let key = git::ConfigKey::parse(text)?;
+                let key = key_for_test(text)?;
 
                 assert_matches!(
                     known(&key).map(|row| row.subsection),
@@ -356,7 +358,7 @@ mod tests {
             #[case] text: &str,
             #[case] expected: &str,
         ) -> Result<(), TestError> {
-            let key = git::ConfigKey::parse(text)?;
+            let key = key_for_test(text)?;
             let row = known(&key).ok_or_else(|| TestError::Failure("unknown key".into()))?;
 
             assert_eq!(row.to_string(), expected);
@@ -393,7 +395,7 @@ mod tests {
                 }
 
                 for text in texts {
-                    let key = git::ConfigKey::parse(&text)?;
+                    let key = key_for_test(&text)?;
 
                     assert_eq!(known(&key), Some(row), "{text}");
                 }

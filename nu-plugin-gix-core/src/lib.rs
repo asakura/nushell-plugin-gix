@@ -27,9 +27,9 @@ pub use gix::pathspec::Pattern;
 
 pub use self::{
     config::{
-        Config, ConfigKey, ConfigType, ConfigValue, GroupPath, LookupPath, Occurrence, Origin,
-        PathContext, RawValue, ScalarType, SectionName, Subsection, VariableName, convert,
-        convert_path,
+        Config, ConfigKey, ConfigPath, ConfigTree, ConfigType, ConfigValue, Entry, Node,
+        Occurrence, Origin, PathContext, RawValue, ScalarType, Scope, SectionHeader, SectionName,
+        SectionNode, Setting, Subsection, SubsectionNode, VariableName, convert, convert_path,
     },
     error::{GixError, SectionFault},
     log::{

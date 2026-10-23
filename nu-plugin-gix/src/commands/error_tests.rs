@@ -9,8 +9,8 @@ use gix::config::{
     parse::{Error as ParseError, Events},
 };
 use nu_plugin_gix_core::{
-    ConfigKey, ConfigType, GroupPath, Origin, RefExpect, RefTarget, RepositoryLocation, ScalarType,
-    SectionFault, SectionName, VariableName,
+    ConfigKey, ConfigType, Origin, RefExpect, RefTarget, RepositoryLocation, ScalarType,
+    SectionFault, SectionHeader, SectionName, VariableName,
 };
 use nu_protocol::ShellError;
 use rstest::rstest;
@@ -55,7 +55,7 @@ fn file_origin() -> Arc<Origin> {
     })
 }
 
-/// The key `a.b`, as `gix config get a.b` reads it.
+/// The key `a.b`, as `gix config a.b` reads it.
 fn a_b_key() -> ConfigKey {
     ConfigKey::new(SectionName::from("a"), None, VariableName::from("b"))
 }
@@ -421,15 +421,67 @@ mod into_labeled {
     }
 
     #[rstest]
-    fn points_an_unsupported_key_member_at_its_member() {
-        let member_span = Span::new(3, 9);
+    fn points_type_without_a_key_at_the_flag() {
+        let flag_span = Span::new(3, 9);
 
-        let labeled = CommandError::UnsupportedKeyMember { span: member_span }
-            .into_labeled(Span::test_data());
+        let labeled =
+            CommandError::ConfigTypeNeedsKey { span: flag_span }.into_labeled(Span::test_data());
 
-        assert_eq!(labeled.code.as_deref(), Some(UNSUPPORTED_KEY_MEMBER_CODE));
-        assert!(!labeled.msg.is_empty(), "got {:?}", labeled.msg);
-        assert_eq!(labeled.labels.first().map(|l| l.span), Some(member_span));
+        assert_eq!(labeled.code.as_deref(), Some(CONFIG_TYPE_NEEDS_KEY_CODE));
+        assert!(
+            labeled
+                .labels
+                .first()
+                .is_some_and(|label| !label.text.is_empty()),
+            "got {:?}",
+            labeled.labels
+        );
+        assert_eq!(labeled.labels.first().map(|l| l.span), Some(flag_span));
+    }
+
+    #[rstest]
+    fn points_type_on_a_section_at_its_key() {
+        let key_span = Span::new(3, 9);
+
+        let labeled = CommandError::ConfigTypeNeedsValue {
+            key: "core".to_owned(),
+            span: key_span,
+        }
+        .into_labeled(Span::test_data());
+
+        assert_eq!(labeled.code.as_deref(), Some(CONFIG_TYPE_NEEDS_VALUE_CODE));
+        assert!(labeled.msg.contains("core"), "got {:?}", labeled.msg);
+        assert!(
+            labeled
+                .labels
+                .first()
+                .is_some_and(|label| !label.text.is_empty()),
+            "got {:?}",
+            labeled.labels
+        );
+        assert_eq!(labeled.labels.first().map(|l| l.span), Some(key_span));
+    }
+
+    #[rstest]
+    fn points_a_missing_config_key_at_its_key() {
+        let key_span = Span::new(3, 9);
+
+        let labeled = CommandError::ConfigKeyNotFound {
+            key: "user.nope".to_owned(),
+            span: key_span,
+        }
+        .into_labeled(Span::test_data());
+
+        assert_eq!(labeled.code.as_deref(), Some(CONFIG_KEY_NOT_FOUND_CODE));
+        assert!(
+            labeled
+                .labels
+                .first()
+                .is_some_and(|label| !label.text.is_empty()),
+            "got {:?}",
+            labeled.labels
+        );
+        assert_eq!(labeled.labels.first().map(|l| l.span), Some(key_span));
     }
 
     #[rstest]
@@ -886,7 +938,10 @@ mod codes {
     /// A section whose bytes cannot be parsed again, as a `GixError::ConfigSectionUnreadable` carries it.
     fn section_unreadable() -> Result<GixError, TestError> {
         Ok(GixError::ConfigSectionUnreadable {
-            section: GroupPath::Section(SectionName::from("a")),
+            section: SectionHeader {
+                section: SectionName::from("a"),
+                subsection: None,
+            },
             source: parse_failure()?,
         })
     }
@@ -955,16 +1010,6 @@ mod codes {
         CONFIG_SUBSECTION_NOT_UTF8_CODE,
         CONFIG_SUBSECTION_NOT_UTF8_LABEL
     )]
-    #[case::config_name_clash(
-            Ok(GixError::ConfigNameClash {
-                section: SectionName::from("a"),
-                name: VariableName::from("b"),
-                variable_origin: file_origin(),
-                subsection_origin: file_origin(),
-            }),
-            CONFIG_NAME_CLASH_CODE,
-            CONFIG_NAME_CLASH_LABEL
-        )]
     #[case::config_section_unreadable(
         section_unreadable(),
         CONFIG_SECTION_UNREADABLE_CODE,
@@ -972,7 +1017,10 @@ mod codes {
     )]
     #[case::config_section_malformed(
             Ok(GixError::ConfigSectionMalformed {
-                section: GroupPath::Section(SectionName::from("a")),
+                section: SectionHeader {
+                section: SectionName::from("a"),
+                subsection: None,
+            },
                 fault: SectionFault::NameWithoutValue(VariableName::from("answer")),
             }),
             CONFIG_SECTION_MALFORMED_CODE,
@@ -1003,7 +1051,10 @@ mod codes {
         let labeled = CommandError::Located {
             span: Span::test_data(),
             source: GixError::ConfigSectionMalformed {
-                section: GroupPath::Section(SectionName::from("gixtest")),
+                section: SectionHeader {
+                    section: SectionName::from("gixtest"),
+                    subsection: None,
+                },
                 fault: SectionFault::NameWithoutValue(VariableName::from("answer")),
             },
         }
@@ -1051,7 +1102,7 @@ mod documentation {
     use super::*;
 
     use crate::GixPlugin;
-    use crate::commands::config::{GET_COMMAND, LIST_COMMAND};
+    use crate::commands::config::{CONFIG_COMMAND, LIST_COMMAND};
 
     use nu_plugin::Plugin as _;
 
@@ -1080,13 +1131,13 @@ mod documentation {
 
     #[rstest]
     fn config_code_lists_are_known_codes() {
-        for code in CONFIG_LIST_CODES.iter().chain(CONFIG_GET_EXTRA_CODES) {
+        for code in CONFIG_LIST_CODES.iter().chain(CONFIG_KEY_CODES) {
             assert!(
                 ALL_CODES.contains(code),
                 "`{code}` is listed but not in ALL_CODES"
             );
         }
-        for code in CONFIG_GET_EXTRA_CODES {
+        for code in CONFIG_KEY_CODES {
             assert!(
                 !CONFIG_LIST_CODES.contains(code),
                 "`{code}` is in both code lists"
@@ -1095,7 +1146,7 @@ mod documentation {
     }
 
     #[rstest]
-    fn get_lists_every_list_code() -> Result<(), TestError> {
+    fn config_lists_every_list_code() -> Result<(), TestError> {
         let plugin = GixPlugin::default();
         let commands = plugin.commands();
         let help_of = |name: &str| -> Result<String, TestError> {
@@ -1105,20 +1156,34 @@ mod documentation {
                 .map(|command| command.extra_description().to_owned())
                 .ok_or_else(|| TestError::Failure(format!("no command `{name}`")))
         };
-        let get_help = help_of(GET_COMMAND)?;
+        let config_help = help_of(CONFIG_COMMAND)?;
         let list_help = help_of(LIST_COMMAND)?;
-        let get_codes = listed_codes(GET_COMMAND, &get_help)?;
+        let config_codes = listed_codes(CONFIG_COMMAND, &config_help)?;
         let list_codes = listed_codes(LIST_COMMAND, &list_help)?;
 
         for code in &list_codes {
-            assert!(get_codes.contains(code), "`{code}` is missing from get");
+            assert!(
+                config_codes.contains(code),
+                "`{code}` is missing from config"
+            );
         }
-        for code in CONFIG_GET_EXTRA_CODES {
-            assert!(get_codes.contains(code), "`{code}` is missing from get");
+        for code in CONFIG_KEY_CODES {
+            assert!(
+                config_codes.contains(code),
+                "`{code}` is missing from config"
+            );
             assert!(!list_codes.contains(code), "`{code}` is listed by list");
         }
 
         Ok(())
+    }
+
+    #[rstest]
+    fn list_codes_exclude_the_conversion_code() {
+        assert!(!CONFIG_LIST_CODES.contains(&CONFIG_VALUE_CONVERSION_CODE));
+        assert!(CONFIG_KEY_CODES.contains(&CONFIG_VALUE_CONVERSION_CODE));
+        assert!(CONFIG_LIST_CODES.contains(&CONFIG_PATH_NOT_UTF8_CODE));
+        assert!(!CONFIG_KEY_CODES.contains(&CONFIG_PATH_NOT_UTF8_CODE));
     }
 }
 

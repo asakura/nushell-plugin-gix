@@ -7,10 +7,12 @@
 //! - `store`: [`Config::read`] reads every occurrence and [`Config`] looks them up by [`ConfigKey`]; it decodes no
 //!   subsection and no value. [`Config::from_occurrences`] builds a [`Config`] from given occurrences, for callers
 //!   without a repository.
-//! - `key`: [`ConfigKey`] and [`LookupPath`] parse the names a caller asks for, from text (the decomposition of gix)
-//!   or from cell path members (`from_members`, never split or joined);
-//!   [`GroupPath`] names a section or subsection.
-//! - `origin`: [`Origin`] names where an occurrence comes from: its file path, or else its kind of source.
+//! - `key`: [`ConfigKey`] holds the already-split parts of a key (core parses no text);
+//!   [`SectionHeader`] names a section or subsection.
+//! - `tree`: [`Config::tree`] nests the occurrences as a [`ConfigTree`] of sections, subsections and [`Setting`]s, and
+//!   [`ConfigTree::get`] finds the node a [`ConfigPath`] (a key already split into parts) names.
+//! - `origin`: [`Origin`] names where an occurrence comes from: its file path, or else its kind of source; its
+//!   [`Scope`] is the git scope word for that source.
 //! - `convert`: [`fn@convert`] reads one [`Occurrence`] as a [`ScalarType`] on request and [`fn@convert_path`] expands
 //!   it as a path; neither selects an occurrence.
 //!
@@ -22,10 +24,12 @@ mod convert;
 mod key;
 mod origin;
 mod store;
+mod tree;
 
-pub use self::key::{ConfigKey, GroupPath, LookupPath, SectionName, Subsection, VariableName};
+pub use self::key::{ConfigKey, SectionHeader, SectionName, Subsection, VariableName};
 pub use self::{
     convert::{ConfigType, ConfigValue, PathContext, ScalarType, convert, convert_path},
-    origin::Origin,
+    origin::{Origin, Scope},
     store::{Config, Occurrence, RawValue},
+    tree::{ConfigPath, ConfigTree, Entry, Node, SectionNode, Setting, SubsectionNode},
 };

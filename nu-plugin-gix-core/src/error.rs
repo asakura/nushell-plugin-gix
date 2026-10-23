@@ -1,6 +1,6 @@
 //! Error type for the git layer; knows nothing about Nushell.
 
-use crate::config::{ConfigKey, ConfigType, GroupPath, Origin, SectionName, VariableName};
+use crate::config::{ConfigKey, ConfigType, Origin, SectionHeader, VariableName};
 use crate::refs::{RefExpect, RefTarget};
 
 use gix::config::parse::Error as ParseError;
@@ -286,29 +286,12 @@ pub enum GixError {
         origin: Arc<Origin>,
     },
 
-    /// A variable and a subsection of the same name are both in one configuration section, so the section
-    /// cannot be read as one record.
-    #[error(
-        "configuration section '{section}' has both a variable named '{name}' ({variable_origin}) and a subsection named '{name}' ({subsection_origin})"
-    )]
-    ConfigNameClash {
-        /// The section both names belong to.
-        section: SectionName,
-        /// The name used twice: it is a variable of the section and the name of one of its subsections.
-        name: VariableName,
-        /// Where the variable's last occurrence was read from.
-        variable_origin: Arc<Origin>,
-        /// Where the first variable of the subsection that has a value (a variable removed by a reset is not emitted)
-        /// was read from.
-        subsection_origin: Arc<Origin>,
-    },
-
     /// A configuration section could not be read back as its variable names and values, because its bytes
     /// cannot be parsed again.
     #[error("the variables of configuration section '{section}' could not be read")]
     ConfigSectionUnreadable {
         /// The section, with its subsection when it has one.
-        section: GroupPath,
+        section: SectionHeader,
         /// The parse failure.
         #[source]
         source: ParseError,
@@ -318,7 +301,7 @@ pub enum GixError {
     #[error("the variables of configuration section '{section}' could not be read: {fault}")]
     ConfigSectionMalformed {
         /// The section, with its subsection when it has one.
-        section: GroupPath,
+        section: SectionHeader,
         /// The event that broke the grammar.
         fault: SectionFault,
     },
@@ -340,7 +323,7 @@ pub enum SectionFault {
 mod tests {
     use super::*;
 
-    use crate::config::{ScalarType, Subsection, VariableName};
+    use crate::config::{ScalarType, SectionName, Subsection, VariableName};
 
     use gix::config::Source;
     use rstest::rstest;
@@ -443,24 +426,6 @@ mod tests {
         }
 
         #[rstest]
-        fn name_clash_names_section_name_and_both_origins() {
-            let error = GixError::ConfigNameClash {
-                section: SectionName::from("core"),
-                name: VariableName::from("bare"),
-                variable_origin: Arc::new(origin("/p/a")),
-                subsection_origin: Arc::new(origin("/p/b")),
-            };
-            let message = error.to_string();
-
-            assert!(message.contains("section 'core'"), "{error}");
-            assert!(message.contains("a variable named 'bare' ("), "{error}");
-            assert!(message.contains("in /p/a"), "{error}");
-            assert!(message.contains("a subsection named 'bare' ("), "{error}");
-            assert!(message.contains("in /p/b"), "{error}");
-            assert!(!message.contains("subsection with a variable"), "{error}");
-        }
-
-        #[rstest]
         #[case::name_without_value(
             SectionFault::NameWithoutValue(VariableName::from("answer")),
             "answer"
@@ -471,7 +436,10 @@ mod tests {
             #[case] expected: &str,
         ) {
             let error = GixError::ConfigSectionMalformed {
-                section: GroupPath::Section(SectionName::from("gixtest")),
+                section: SectionHeader {
+                    section: SectionName::from("gixtest"),
+                    subsection: None,
+                },
                 fault,
             };
 

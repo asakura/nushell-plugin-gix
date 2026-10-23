@@ -1,6 +1,8 @@
 //! The raw occurrences of the layered configuration: every `name = value` as git reads it, nothing selected or decoded.
 
-use super::{ConfigKey, GroupPath, Origin, SectionName, Subsection, VariableName};
+use super::{
+    ConfigKey, Origin, SectionHeader, SectionName, Subsection, VariableName, tree::ConfigTree,
+};
 use crate::error::{GixError, SectionFault};
 use crate::repository::OpenRepository;
 
@@ -68,11 +70,9 @@ impl Config {
                 }
             });
 
-            let group = || {
-                subsection.as_ref().map_or_else(
-                    || GroupPath::Section(section_name.clone()),
-                    |sub| GroupPath::Subsection(section_name.clone(), sub.clone()),
-                )
+            let group = || SectionHeader {
+                section: section_name.clone(),
+                subsection: subsection.clone(),
             };
 
             let origin = Arc::new(Origin::new(section.meta()));
@@ -120,6 +120,12 @@ impl Config {
         self.variables
             .iter()
             .map(|(key, occurrences)| (key, occurrences.as_slice()))
+    }
+
+    /// The nested tree of every variable, built from [`Config::iter`] without re-reading anything.
+    #[must_use = "the tree is the only result"]
+    pub fn tree(&self) -> ConfigTree<'_> {
+        ConfigTree::new(self)
     }
 
     /// Groups `occurrences` under their key, keeping the order of each key's occurrences. Called by [`Config::read`] and
@@ -479,8 +485,8 @@ mod tests {
         }
 
         #[rstest]
-        fn groups_occurrences_under_their_key_in_order() -> Result<(), TestError> {
-            let key = ConfigKey::parse("c.k")?;
+        fn groups_occurrences_under_their_key_in_order() {
+            let key = ConfigKey::for_test("c.k");
 
             let config = Config::from_occurrences([
                 (key.clone(), occurrence(b"first")),
@@ -491,13 +497,12 @@ mod tests {
                 config.occurrences(&key),
                 [occurrence(b"first"), occurrence(b"second")].as_slice()
             );
-            Ok(())
         }
 
         #[rstest]
-        fn iterates_keys_in_key_order_whatever_the_input_order() -> Result<(), TestError> {
-            let first = ConfigKey::parse("a.z")?;
-            let second = ConfigKey::parse("b.a")?;
+        fn iterates_keys_in_key_order_whatever_the_input_order() {
+            let first = ConfigKey::for_test("a.z");
+            let second = ConfigKey::for_test("b.a");
 
             let config = Config::from_occurrences([
                 (second.clone(), occurrence(b"2")),
@@ -508,7 +513,6 @@ mod tests {
                 config.iter().map(|(key, _)| key).collect::<Vec<_>>(),
                 vec![&first, &second]
             );
-            Ok(())
         }
     }
 
@@ -528,7 +532,7 @@ mod tests {
 
                 assert_eq!(
                     config
-                        .occurrences(&ConfigKey::parse("a.Sub.x")?)
+                        .occurrences(&ConfigKey::for_test("a.Sub.x"))
                         .iter()
                         .map(|occurrence| occurrence.value.clone())
                         .collect::<Vec<_>>(),
@@ -547,14 +551,14 @@ mod tests {
 
                 assert_eq!(
                     config
-                        .occurrences(&ConfigKey::parse("a.sub.y")?)
+                        .occurrences(&ConfigKey::for_test("a.sub.y"))
                         .iter()
                         .map(|occurrence| occurrence.value.clone())
                         .collect::<Vec<_>>(),
                     vec![RawValue::Bytes(b"2".to_vec())]
                 );
                 assert_eq!(
-                    config.occurrences(&ConfigKey::parse("a.Sub.y")?),
+                    config.occurrences(&ConfigKey::for_test("a.Sub.y")),
                     Vec::<Occurrence>::new().as_slice()
                 );
                 Ok(())
@@ -568,9 +572,9 @@ mod tests {
 
                 let config = read_config(&repo, b"[a \"\"]\n\tb = 1\n")?;
 
-                assert_eq!(config.occurrences(&ConfigKey::parse("a..b")?).len(), 1);
+                assert_eq!(config.occurrences(&ConfigKey::for_test("a..b")).len(), 1);
                 assert_eq!(
-                    config.occurrences(&ConfigKey::parse("a.b")?),
+                    config.occurrences(&ConfigKey::for_test("a.b")),
                     Vec::<Occurrence>::new().as_slice()
                 );
                 Ok(())
@@ -589,7 +593,7 @@ mod tests {
 
                 assert_eq!(
                     config
-                        .occurrences(&ConfigKey::parse("gixtest.answer")?)
+                        .occurrences(&ConfigKey::for_test("gixtest.answer"))
                         .iter()
                         .map(|occurrence| occurrence.value.clone())
                         .collect::<Vec<_>>(),
@@ -631,7 +635,7 @@ mod tests {
                     b"[b]\n\tflag\n\tempty =\n\tmulti = a \\\n b\n\tquoted = \"x y\"\n\ttab = a \\\n\tb\n\tlead = a \\\n   \t b\n\ttrail = a \\\n b  \n",
                 )?;
 
-                let occurrences = config.occurrences(&ConfigKey::parse(text)?);
+                let occurrences = config.occurrences(&ConfigKey::for_test(text));
                 assert_matches!(
                     occurrences,
                     [occurrence] if occurrence.value == expected,
@@ -650,7 +654,7 @@ mod tests {
 
                 assert_eq!(
                     config
-                        .occurrences(&ConfigKey::parse("c.k")?)
+                        .occurrences(&ConfigKey::for_test("c.k"))
                         .iter()
                         .map(|occurrence| occurrence.value.clone())
                         .collect::<Vec<_>>(),
@@ -676,7 +680,7 @@ mod tests {
                 let expected = repo.path().join(".git").join("config");
 
                 assert_matches!(
-                    config.occurrences(&ConfigKey::parse("gixtest.answer")?),
+                    config.occurrences(&ConfigKey::for_test("gixtest.answer")),
                     [Occurrence { origin, .. }]
                         if origin.path.as_deref() == Some(expected.as_path()),
                 );
@@ -690,8 +694,8 @@ mod tests {
                 let repo = test_repo?;
 
                 let config = read_config(&repo, b"[gixtest]\n\tfirst = 1\n\tsecond = 2\n")?;
-                let first = config.occurrences(&ConfigKey::parse("gixtest.first")?);
-                let second = config.occurrences(&ConfigKey::parse("gixtest.second")?);
+                let first = config.occurrences(&ConfigKey::for_test("gixtest.first"));
+                let second = config.occurrences(&ConfigKey::for_test("gixtest.second"));
                 let first_origin = &first
                     .first()
                     .ok_or_else(|| TestError::Failure(format!("got {first:?}")))?
@@ -733,7 +737,7 @@ mod tests {
                 let config = Config::read(&opened)?;
 
                 assert_matches!(
-                    config.occurrences(&ConfigKey::parse("gixtest.inc")?),
+                    config.occurrences(&ConfigKey::for_test("gixtest.inc")),
                     [Occurrence { origin, .. }]
                         if origin.path.as_deref().is_some_and(|path| path.ends_with("extra.cfg")),
                 );
@@ -752,7 +756,7 @@ mod tests {
                 let config = Config::read(&opened)?;
 
                 assert_matches!(
-                    config.occurrences(&ConfigKey::parse("gixtest.answer")?),
+                    config.occurrences(&ConfigKey::for_test("gixtest.answer")),
                     [Occurrence { trusted: false, .. }],
                 );
                 Ok(())
@@ -770,7 +774,7 @@ mod tests {
             let config = read_config(&repo, b"[A]\n\tNaMe = 1\n")?;
 
             assert_matches!(
-                config.occurrences(&ConfigKey::parse("a.name")?),
+                config.occurrences(&ConfigKey::for_test("a.name")),
                 [Occurrence { value: RawValue::Bytes(value), .. }] if value == b"1",
             );
             Ok(())
@@ -785,7 +789,7 @@ mod tests {
             let config = read_config(&repo, GIXTEST_CONFIG)?;
 
             assert_eq!(
-                config.occurrences(&ConfigKey::parse("gixtest.missing")?),
+                config.occurrences(&ConfigKey::for_test("gixtest.missing")),
                 Vec::<Occurrence>::new().as_slice()
             );
             Ok(())

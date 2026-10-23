@@ -50,7 +50,6 @@ impl Plugin for GixPlugin {
             Box::new(commands::Log),
             Box::new(commands::Rev),
             Box::new(commands::Config),
-            Box::new(commands::ConfigGet),
             Box::new(commands::ConfigList),
             Box::new(commands::Ref),
             Box::new(commands::RefHead),

@@ -1,4 +1,5 @@
-//! Where a configuration occurrence comes from: its file, or else the kind of source it was read from.
+//! Where a configuration occurrence comes from: its file, or else the kind of source it was read from, and the git
+//! [`Scope`] that source belongs to.
 
 use gix::config::{Source, file::Metadata};
 
@@ -14,6 +15,11 @@ const ENVIRONMENT: &str = "environment";
 const COMMAND_LINE: &str = "command line";
 const API: &str = "api";
 const ENVIRONMENT_OVERRIDE: &str = "environment override";
+const SYSTEM_SCOPE: &str = "system";
+const GLOBAL_SCOPE: &str = "global";
+const LOCAL_SCOPE: &str = "local";
+const WORKTREE_SCOPE: &str = "worktree";
+const COMMAND_SCOPE: &str = "command";
 
 /// Where a configuration occurrence comes from: the file it was read from, or else the kind of source.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +30,36 @@ pub struct Origin {
     pub source: Source,
 }
 
+/// git's word for the kind of file a setting comes from (`git config --show-scope`); `User` and the XDG file are both
+/// global; command line, environment and API settings are command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// The system-wide file, or git's installation defaults.
+    System,
+    /// The user's file, or the XDG file: both are global.
+    Global,
+    /// The repository's own config file.
+    Local,
+    /// The worktree's config file.
+    Worktree,
+    /// A command line, environment or API setting.
+    Command,
+}
+
+impl Scope {
+    /// git's word for this scope, as `git config --show-scope` prints it.
+    #[must_use = "the word is the only result of this function"]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::System => SYSTEM_SCOPE,
+            Self::Global => GLOBAL_SCOPE,
+            Self::Local => LOCAL_SCOPE,
+            Self::Worktree => WORKTREE_SCOPE,
+            Self::Command => COMMAND_SCOPE,
+        }
+    }
+}
+
 impl Origin {
     /// The origin of the section described by `meta`.
     #[must_use = "the origin is only useful when it is stored with an occurrence or an error"]
@@ -31,6 +67,18 @@ impl Origin {
         Self {
             path: meta.path.clone(),
             source: meta.source,
+        }
+    }
+
+    /// The git scope of the source this origin was read from.
+    #[must_use = "the scope is the only result of this function"]
+    pub const fn scope(&self) -> Scope {
+        match self.source {
+            Source::GitInstallation | Source::System => Scope::System,
+            Source::Git | Source::User => Scope::Global,
+            Source::Local => Scope::Local,
+            Source::Worktree => Scope::Worktree,
+            Source::Env | Source::Cli | Source::Api | Source::EnvOverride => Scope::Command,
         }
     }
 }
@@ -103,6 +151,37 @@ mod tests {
             };
 
             assert_eq!(format!("{origin}"), expected);
+        }
+    }
+
+    mod scope {
+        use super::*;
+
+        #[rstest]
+        #[case::git_installation(Source::GitInstallation, Scope::System)]
+        #[case::system(Source::System, Scope::System)]
+        #[case::xdg(Source::Git, Scope::Global)]
+        #[case::user(Source::User, Scope::Global)]
+        #[case::local(Source::Local, Scope::Local)]
+        #[case::worktree(Source::Worktree, Scope::Worktree)]
+        #[case::environment(Source::Env, Scope::Command)]
+        #[case::command_line(Source::Cli, Scope::Command)]
+        #[case::api(Source::Api, Scope::Command)]
+        #[case::environment_override(Source::EnvOverride, Scope::Command)]
+        fn maps_each_source(#[case] source: Source, #[case] expected: Scope) {
+            let origin = Origin { path: None, source };
+
+            assert_eq!(origin.scope(), expected);
+        }
+
+        #[rstest]
+        #[case::system(Scope::System, "system")]
+        #[case::global(Scope::Global, "global")]
+        #[case::local(Scope::Local, "local")]
+        #[case::worktree(Scope::Worktree, "worktree")]
+        #[case::command(Scope::Command, "command")]
+        fn as_str_words(#[case] scope: Scope, #[case] word: &str) {
+            assert_eq!(scope.as_str(), word);
         }
     }
 }

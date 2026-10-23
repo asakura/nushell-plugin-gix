@@ -20,24 +20,24 @@
 //! entry outside the repository points at that entry (`gix::path-outside-repository`), and an
 //! invalid or unsupported `--paths` pathspec points at that entry (`gix::invalid-pathspec`).
 //!
-//! An invalid `gix config get` key points at the key (`gix::invalid-config-key`); a value that is
-//! not UTF-8 points at the key too (`gix::config-value-not-utf8`). A value that cannot be read as
-//! the `--type` given points at the key (`gix::invalid-config-value`), a path value that is not
-//! UTF-8 points at the key (`gix::config-path-not-utf8`), and an unknown `--type` value points at
-//! the value (`gix::unknown-config-type`). `gix config list` takes no key, so every failure to list
-//! an entry points at the handle it was given: a value or path that is not UTF-8 uses the codes
-//! above, a subsection name that is not UTF-8 is `gix::config-subsection-not-utf8`, and a section
-//! that cannot be read back as its names and values is `gix::config-section-unreadable`.
+//! An invalid `gix config` key points at the key (`gix::invalid-config-key`); a value that is not
+//! UTF-8 points at the key too when there is one (`gix::config-value-not-utf8`); without a key (the
+//! whole-record `gix config`) it points at the handle. A value that cannot be read as the `--type`
+//! given points at the key (`gix::invalid-config-value`), a path value that is not UTF-8 points at
+//! the key (`gix::config-path-not-utf8`), and an unknown `--type` value points at the value
+//! (`gix::unknown-config-type`). `gix config list` takes no key, so every failure to list an entry
+//! points at the handle it was given: a value or path that is not UTF-8 carries `gix::config-value-not-utf8` or `gix::config-path-not-utf8` (as above, but at the handle, not at a key), a
+//! subsection name that is not UTF-8 is `gix::config-subsection-not-utf8`, and a section that cannot
+//! be read back as its names and values is `gix::config-section-unreadable`.
 //!
-//! A list key whose values an empty value (`name =`) all removed points at the key
-//! (`gix::config-key-reset`) when `gix config get` asks for it; `gix config list` leaves such keys out.
+//! A list key whose values were all removed by an empty value (`name =`) points at the key
+//! (`gix::config-key-reset`) when `gix config` asks for it; `gix config list` shows such a key's reset
+//! marker as an empty value (`""`).
 //!
 //! A valueless key read as an `int`, `path` or `string` points at the key (`gix::config-value-missing`),
 //! and a `%(prefix)/` path whose install directory is unknown points at the key too
-//! (`gix::install-dir-unavailable`). A variable and a subsection with one name in one section is
-//! `gix::config-name-clash`, and a section whose parse events break the grammar of a variable is
-//! `gix::config-section-malformed`; both point at the key for `gix config get` and at the handle for
-//! `gix config list`.
+//! (`gix::install-dir-unavailable`). A section whose parse events break the grammar of a variable is
+//! `gix::config-section-malformed`; it points at the handle for both `gix config` and `gix config list`.
 //!
 //! The messages of the configuration errors name where the value came from: its file, as in
 //! `(in /home/u/.gitconfig)`, or else its source kind, as in `(from the environment)`. The codes and
@@ -48,8 +48,12 @@
 //!
 //! A negative `--limit` or `--skip` points at its value.
 //!
-//! A cell path member of a `gix config get` key that is a number, `?` or `!` rather than plain text
-//! points at that member (`gix::config-unsupported-key-member`).
+//! A `gix config` key that names no section, subsection or variable is `gix::config-key-not-found`,
+//! and points at the key; a key with a `?` member is null instead.
+//!
+//! `gix config --type` without a key (`gix::config-type-needs-key`) points at the `--type` argument
+//! (the flag and its value); with a key that names a
+//! section or subsection (`gix::config-type-needs-value`) it points at the key.
 
 #[cfg(test)]
 #[path = "error_tests.rs"]
@@ -102,37 +106,39 @@ const CONFIG_SECTION_UNREADABLE_CODE: &str = "gix::config-section-unreadable";
 const CONFIG_KEY_RESET_CODE: &str = "gix::config-key-reset";
 const CONFIG_VALUE_MISSING_CODE: &str = "gix::config-value-missing";
 const INSTALL_DIR_UNAVAILABLE_CODE: &str = "gix::install-dir-unavailable";
-const CONFIG_NAME_CLASH_CODE: &str = "gix::config-name-clash";
 const CONFIG_SECTION_MALFORMED_CODE: &str = "gix::config-section-malformed";
-const UNSUPPORTED_KEY_MEMBER_CODE: &str = "gix::config-unsupported-key-member";
+const CONFIG_KEY_NOT_FOUND_CODE: &str = "gix::config-key-not-found";
+const CONFIG_TYPE_NEEDS_KEY_CODE: &str = "gix::config-type-needs-key";
+const CONFIG_TYPE_NEEDS_VALUE_CODE: &str = "gix::config-type-needs-value";
 
 /// Start of the help line that lists a command's error codes.
 const CODES_LINE_PREFIX: &str = "Error codes: ";
 /// Separator of the codes in that line.
 const CODES_SEPARATOR: &str = ", ";
 
-/// Codes `gix config list` can raise; `gix config get` can raise them too.
+/// Codes `gix config list` can raise; `gix config` can raise them too.
 pub(super) const CONFIG_LIST_CODES: &[&str] = &[
     WRONG_INPUT_CODE,
-    CONFIG_VALUE_CONVERSION_CODE,
+    CONFIG_PATH_NOT_UTF8_CODE,
     CONFIG_VALUE_NOT_UTF8_CODE,
     CONFIG_SUBSECTION_NOT_UTF8_CODE,
     CONFIG_SECTION_UNREADABLE_CODE,
     CONFIG_SECTION_MALFORMED_CODE,
-    CONFIG_NAME_CLASH_CODE,
     OPEN_FAILED_CODE,
     REPOSITORY_GONE_CODE,
 ];
-/// Codes only `gix config get` can raise, on top of [`CONFIG_LIST_CODES`].
-pub(super) const CONFIG_GET_EXTRA_CODES: &[&str] = &[
+/// Codes only `gix config` can raise, on top of [`CONFIG_LIST_CODES`].
+pub(super) const CONFIG_KEY_CODES: &[&str] = &[
     INVALID_ARGUMENT_CODE,
     INVALID_CONFIG_KEY_CODE,
     UNKNOWN_CONFIG_TYPE_CODE,
     CONFIG_VALUE_MISSING_CODE,
-    CONFIG_PATH_NOT_UTF8_CODE,
+    CONFIG_VALUE_CONVERSION_CODE,
     INSTALL_DIR_UNAVAILABLE_CODE,
     CONFIG_KEY_RESET_CODE,
-    UNSUPPORTED_KEY_MEMBER_CODE,
+    CONFIG_KEY_NOT_FOUND_CODE,
+    CONFIG_TYPE_NEEDS_KEY_CODE,
+    CONFIG_TYPE_NEEDS_VALUE_CODE,
 ];
 
 /// Every stable code an error of this plugin can carry.
@@ -177,9 +183,10 @@ const ALL_CODES: &[&str] = &[
     CONFIG_KEY_RESET_CODE,
     CONFIG_VALUE_MISSING_CODE,
     INSTALL_DIR_UNAVAILABLE_CODE,
-    CONFIG_NAME_CLASH_CODE,
     CONFIG_SECTION_MALFORMED_CODE,
-    UNSUPPORTED_KEY_MEMBER_CODE,
+    CONFIG_KEY_NOT_FOUND_CODE,
+    CONFIG_TYPE_NEEDS_KEY_CODE,
+    CONFIG_TYPE_NEEDS_VALUE_CODE,
 ];
 
 const INVALID_SIDE_LABEL: &str = "invalid side";
@@ -210,9 +217,9 @@ const CONFIG_KEY_RESET_HELP: &str =
 const CONFIG_VALUE_MISSING_LABEL: &str = "this key has no value, so it cannot be read as this type";
 const INSTALL_DIR_UNAVAILABLE_LABEL: &str =
     "this path uses %(prefix)/, which needs the install directory of git";
-const CONFIG_NAME_CLASH_LABEL: &str = "this section has a variable and a subsection with this name";
-const UNSUPPORTED_KEY_MEMBER_LABEL: &str =
-    "this part is a number or has a ? / ! modifier; quote it to use it as text";
+const CONFIG_KEY_NOT_FOUND_LABEL: &str = "no configuration variable or section with this name";
+const CONFIG_TYPE_NEEDS_KEY_LABEL: &str = "--type converts the value of a key; give a key";
+const CONFIG_TYPE_NEEDS_VALUE_LABEL: &str = "this names a section, not a single value";
 
 /// Label for a repository that was found but cannot be opened.
 const UNOPENABLE_LABEL: &str =
@@ -243,7 +250,7 @@ pub enum CommandError {
     /// The git layer rejected an argument: a revision it could not resolve, shorten or that names
     /// no commit, a short length out of range, a reference name that is not valid, a reference
     /// that moved, a `--paths` entry outside the repository, or a `--paths` entry that is not a
-    /// supported pathspec, a `gix config get` key that is malformed, a value that is not UTF-8,
+    /// supported pathspec, a `gix config` key that is malformed, a value that is not UTF-8,
     /// a value that cannot be read as the requested `--type`, a path value that is not UTF-8, or a
     /// `gix config list` entry that cannot be listed (a value, path or subsection that is not UTF-8,
     /// or a section that cannot be read back), a valueless key read as a typed value, a `%(prefix)/`
@@ -450,12 +457,28 @@ pub enum CommandError {
         span: Span,
     },
 
-    /// A cell path member of a `gix config get` key is not plain text.
-    #[error(
-        "a key part must be plain text: number, `?` and `!` parts are not supported; quote it, for example remote.\"0\".url"
-    )]
-    UnsupportedKeyMember {
-        /// Span of the member (a number, or a `?`/`!` modifier).
+    /// A `gix config` key names no section, subsection or variable, and it has no `?`.
+    #[error("configuration key '{key}' is not set")]
+    ConfigKeyNotFound {
+        /// The key as written.
+        key: String,
+        /// Span of the key argument.
+        span: Span,
+    },
+
+    /// `gix config --type` is given without a key.
+    #[error("--type needs a key")]
+    ConfigTypeNeedsKey {
+        /// Span of the `--type` argument: the flag name through its value.
+        span: Span,
+    },
+
+    /// `gix config --type` is given a key that names a section or a subsection, not a single value.
+    #[error("configuration key '{key}' names a section, not a single value")]
+    ConfigTypeNeedsValue {
+        /// The key as written.
+        key: String,
+        /// Span of the key argument.
         span: Span,
     },
 }
@@ -569,7 +592,15 @@ impl CommandError {
                 given: _given,
                 span: _span,
             } => self.source(),
-            Self::UnsupportedKeyMember { span: _span } => self.source(),
+            Self::ConfigKeyNotFound {
+                key: _key,
+                span: _span,
+            }
+            | Self::ConfigTypeNeedsValue {
+                key: _key,
+                span: _span,
+            } => self.source(),
+            Self::ConfigTypeNeedsKey { span: _span } => self.source(),
             Self::EmptyRevision { span: _span }
             | Self::MissingExpect { span: _span }
             | Self::InvalidSideRecord { span: _span } => self.source(),
@@ -706,7 +737,15 @@ impl CommandError {
                 given: _given,
                 span: _span,
             } => UNKNOWN_CONFIG_TYPE_CODE,
-            Self::UnsupportedKeyMember { span: _span } => UNSUPPORTED_KEY_MEMBER_CODE,
+            Self::ConfigKeyNotFound {
+                key: _key,
+                span: _span,
+            } => CONFIG_KEY_NOT_FOUND_CODE,
+            Self::ConfigTypeNeedsKey { span: _span } => CONFIG_TYPE_NEEDS_KEY_CODE,
+            Self::ConfigTypeNeedsValue {
+                key: _key,
+                span: _span,
+            } => CONFIG_TYPE_NEEDS_VALUE_CODE,
         }
     }
 
@@ -736,7 +775,9 @@ impl CommandError {
             Self::EmptyRevision { span }
             | Self::MissingExpect { span }
             | Self::InvalidSideRecord { span }
-            | Self::UnsupportedKeyMember { span } => Some(*span),
+            | Self::ConfigTypeNeedsKey { span } => Some(*span),
+            Self::ConfigKeyNotFound { span, key: _key }
+            | Self::ConfigTypeNeedsValue { span, key: _key } => Some(*span),
             Self::InvalidSideType { span, got: _got } => Some(*span),
             Self::InvalidObjectId {
                 span,
@@ -941,12 +982,6 @@ impl CommandError {
                     source: _source,
                     origin: _origin,
                 } => Some(CONFIG_SUBSECTION_NOT_UTF8_LABEL),
-                GixError::ConfigNameClash {
-                    section: _section,
-                    name: _name,
-                    variable_origin: _variable_origin,
-                    subsection_origin: _subsection_origin,
-                } => Some(CONFIG_NAME_CLASH_LABEL),
                 GixError::ConfigSectionUnreadable {
                     section: _section,
                     source: _source,
@@ -991,7 +1026,15 @@ impl CommandError {
                 given: _given,
                 span: _span,
             } => Some(UNKNOWN_CONFIG_TYPE_LABEL),
-            Self::UnsupportedKeyMember { span: _span } => Some(UNSUPPORTED_KEY_MEMBER_LABEL),
+            Self::ConfigKeyNotFound {
+                key: _key,
+                span: _span,
+            } => Some(CONFIG_KEY_NOT_FOUND_LABEL),
+            Self::ConfigTypeNeedsKey { span: _span } => Some(CONFIG_TYPE_NEEDS_KEY_LABEL),
+            Self::ConfigTypeNeedsValue {
+                key: _key,
+                span: _span,
+            } => Some(CONFIG_TYPE_NEEDS_VALUE_LABEL),
             Self::WrongInput(_) | Self::Git(_) => None,
         }
     }
@@ -1021,24 +1064,20 @@ impl CommandError {
             Self::Located {
                 span: _span,
                 source,
-            } => {
-                if matches!(
-                    source,
-                    GixError::ConfigKeyReset {
-                        key: _key,
-                        origin: _origin,
-                    }
-                ) {
-                    Some(CONFIG_KEY_RESET_HELP)
-                } else {
-                    None
-                }
-            }
+            } => reset_help(source),
             Self::UnknownConfigType {
                 given: _given,
                 span: _span,
             } => None,
-            Self::UnsupportedKeyMember { span: _span } => None,
+            Self::ConfigTypeNeedsKey { span: _span } => None,
+            Self::ConfigKeyNotFound {
+                key: _key,
+                span: _span,
+            }
+            | Self::ConfigTypeNeedsValue {
+                key: _key,
+                span: _span,
+            } => None,
             Self::HandleRepositoryGone {
                 git_dir: _git_dir,
                 span: _span,
@@ -1093,6 +1132,21 @@ impl CommandError {
             } => None,
             Self::MissingExpect { span: _span } => None,
         }
+    }
+}
+
+/// The hint for a located error: a reset key is set again to give it a value; no other source has one.
+const fn reset_help(source: &GixError) -> Option<&'static str> {
+    if matches!(
+        source,
+        GixError::ConfigKeyReset {
+            key: _key,
+            origin: _origin,
+        }
+    ) {
+        Some(CONFIG_KEY_RESET_HELP)
+    } else {
+        None
     }
 }
 
@@ -1192,12 +1246,6 @@ const fn git_code(error: &GixError) -> &'static str {
             source: _source,
             origin: _origin,
         } => CONFIG_SUBSECTION_NOT_UTF8_CODE,
-        GixError::ConfigNameClash {
-            section: _section,
-            name: _name,
-            variable_origin: _variable_origin,
-            subsection_origin: _subsection_origin,
-        } => CONFIG_NAME_CLASH_CODE,
         GixError::ConfigSectionUnreadable {
             section: _section,
             source: _source,
