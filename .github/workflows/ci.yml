@@ -17,15 +17,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
 
       # Caches locally built store paths (the rust-overlay toolchain, the
       # git-hooks config) in the GitHub Actions cache, deduplicated across runs by hestia;
       # anything already on cache.nixos.org is fetched from there and never
       # re-cached (upstream-cache-filter).
-      - uses: Mic92/hestia@v3
+      - uses: Mic92/hestia@dfed9ced335d28978ba74e513939a10db1f71025 # v3
 
         with:
           upstream-cache-filter: true
@@ -34,7 +34,7 @@ jobs:
       # runner's preinstalled rustc, so flake.lock is keyed in explicitly:
       # a toolchain bump must roll the key instead of restoring stale
       # artifacts as a "full match" and never saving fresh ones.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
         with:
           key: ${{ hashFiles('flake.lock') }}
@@ -81,11 +81,11 @@ jobs:
           - nu_plugin_gix-aarch64-linux-musl
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
 
-      - uses: Mic92/hestia@v3
+      - uses: Mic92/hestia@dfed9ced335d28978ba74e513939a10db1f71025 # v3
 
         with:
           upstream-cache-filter: true
