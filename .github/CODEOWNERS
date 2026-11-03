@@ -1,0 +1,33 @@
+# Single maintainer. GitHub never requests review from a PR's own author, so
+# this routes bot PRs (dependabot, renovate, github-actions) to the
+# maintainer without adding noise to their own PRs. Do not enable "Require
+# review from Code Owners": the maintainer cannot approve their own PRs.
+#
+# Last matching pattern wins, so keep the catch-all first.
+
+# Default owner for everything.
+*                       @asakura
+
+# CI, release and supply-chain configuration.
+/.github/               @asakura
+/renovate.json          @asakura
+/deny.toml              @asakura
+/release-plz.toml       @asakura
+/cliff.toml             @asakura
+
+# Dependency manifests and lockfiles.
+Cargo.toml              @asakura
+/Cargo.lock             @asakura
+/flake.lock             @asakura
+
+# Build, toolchain and Nix packaging.
+/flake.nix              @asakura
+/package.nix            @asakura
+/rust-toolchain.toml    @asakura
+/clippy.toml            @asakura
+/.taplo.toml            @asakura
+
+# Workspace crates.
+/nu-plugin-gix/         @asakura
+/nu-plugin-gix-core/    @asakura
+/nu-plugin-gix-testing-support/ @asakura
