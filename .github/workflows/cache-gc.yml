@@ -31,7 +31,7 @@ jobs:
 
       # Installs the released binary and exports its path as HESTIA_BIN along
       # with the cache API tokens GC needs; avoids building hestia from source.
-      - uses: Mic92/hestia@dfed9ced335d28978ba74e513939a10db1f71025 # v3
+      - uses: Mic92/hestia@dfed9ced335d28978ba74e513939a10db1f71025 # v3.1.0
 
       - name: Run garbage collection
         run: |
