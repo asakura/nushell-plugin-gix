@@ -27,7 +27,9 @@ jobs:
       actions: write
       contents: read
     steps:
-      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - uses: asakura/actions/.github/actions/setup-nix@32fd43107b80ca9d29152b5d32d4bb61e8723527 # v1.0.0
+        with:
+          github-token: ${{ github.token }}
 
       # Installs the released binary and exports its path as HESTIA_BIN along
       # with the cache API tokens GC needs; avoids building hestia from source.
