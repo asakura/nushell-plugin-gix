@@ -25,7 +25,8 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Update flake.lock
-        uses: DeterminateSystems/update-flake-lock@da03c0f078bc4b2c37ee4f7e072d34bf8f188bb3 # v29 # pin-comment: no vX.Y.Z tag upstream
+        # pin-comment: no vX.Y.Z tag upstream
+        uses: DeterminateSystems/update-flake-lock@da03c0f078bc4b2c37ee4f7e072d34bf8f188bb3 # v29
 
         with:
           pr-title: "chore(flake): update flake.lock"
