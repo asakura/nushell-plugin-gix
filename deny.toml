@@ -33,6 +33,7 @@ ignore = [
   { id = "RUSTSEC-2026-0369", reason = "zip 7.4.0 is pulled in by calamine 0.34 via nu-command 0.112.2 via nu-test-support (dev-only); fix is 9.0.0, outside calamine's requirement" },
   { id = "RUSTSEC-2026-0429", reason = "zip 7.4.0 is pulled in by calamine 0.34 via nu-command 0.112.2 via nu-test-support (dev-only); fix is 9.0.0, outside calamine's requirement" },
   { id = "RUSTSEC-2026-0436", reason = "calamine 0.34.0 is pulled in by nu-command 0.112.2 (also via nu-test-support, dev-only); fix is 0.38.0, outside nu-command's requirement" },
+  { id = "RUSTSEC-2026-0441", reason = "pin-utils 0.1.1 is unmaintained and pulled in by nix 0.26.4 via gatekeeper via nu-test-support (dev-only); no replacement until Nushell migrates" },
 ]
 
 # https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
