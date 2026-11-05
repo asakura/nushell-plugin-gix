@@ -20,7 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+      - uses: asakura/actions/.github/actions/setup-nix@32fd43107b80ca9d29152b5d32d4bb61e8723527 # v1.0.0
+        with:
+          github-token: ${{ github.token }}
 
       - uses: Mic92/hestia@dfed9ced335d28978ba74e513939a10db1f71025 # v3.1.0
 
