@@ -124,9 +124,9 @@ skip = [
   { crate = "thiserror-impl@1.0.69", reason = "pulled in by thiserror 1.0.69 from the pinned nushell/gix tree" },
   { crate = "thiserror-impl@2.0.21", reason = "pulled in by thiserror 2.0.21 from the pinned nushell/gix tree" },
   { crate = "unicode-width@0.1.14", reason = "pulled in by miette 7.6.0 from the pinned nushell/gix tree" },
-  { crate = "unicode-width@0.2.2", reason = "pulled in by console 0.16.6 and nu-command 0.112.2 from the pinned nushell/gix tree" },
+  { crate = "unicode-width@0.2.3", reason = "pulled in by console 0.16.6 and nu-command 0.112.2 from the pinned nushell/gix tree" },
   { crate = "winnow@0.7.15", reason = "pulled in by parse_datetime 0.14.0 (via uu_touch) from the pinned nushell/gix tree" },
-  { crate = "winnow@1.0.4", reason = "pulled in by toml 1.1.8 from the pinned nushell/gix tree" },
+  { crate = "winnow@1.0.5", reason = "pulled in by toml 1.2.0 from the pinned nushell/gix tree" },
   { crate = "zerocopy@0.7.35", reason = "pulled in by buf-trait 0.4.1 (via nu-utils 0.112.2) from the pinned nushell/gix tree" },
   { crate = "zerocopy@0.8.63", reason = "pulled in by ppv-lite86 0.2.21 (via rand_chacha/rand 0.8.8) from the pinned nushell/gix tree" },
 ]
